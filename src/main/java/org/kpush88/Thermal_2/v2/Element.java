@@ -5,9 +5,9 @@ import lombok.Setter;
 
 @Getter
 @Setter
-public class Element {
+public abstract class Element {
 
-    private Vertex heatingMedium;
-    private Vertex heatedMedium;
+    private Vertex heatingMediumVertex;
+    private Vertex heatedMediumVertex;
 
 }
