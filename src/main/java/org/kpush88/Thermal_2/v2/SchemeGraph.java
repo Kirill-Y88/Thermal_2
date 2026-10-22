@@ -9,15 +9,15 @@ public class SchemeGraph<T> {
     // вершина -> множество входящих соседей (рёбра to -> from), для удобства
     private final Map<T, Set<T>> inputList = new HashMap<>();
 
-    public void addVertex(T vertex) {
+    public void addConnection(T vertex) {
         outputList.putIfAbsent(vertex, new HashSet<>());
         inputList.putIfAbsent(vertex, new HashSet<>());
     }
 
     /** Добавляет направленное ребро from -> to (только в одну сторону!) */
     public void addEdge(T from, T to) {
-        addVertex(from);
-        addVertex(to);
+        addConnection(from);
+        addConnection(to);
         outputList.get(from).add(to);
         inputList.get(to).add(from);
     }
