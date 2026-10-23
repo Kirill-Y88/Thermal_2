@@ -7,28 +7,34 @@ import org.kpush88.Thermal_2.v3.Turbine;
 import org.kpush88.Thermal_2.v3.thermo.WaterSteam;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
- * Турбина: каждый отсек расширяет пар по изоэнтропе с поправкой на ηoi.
+ * Турбина: отсеки расширяют пар последовательно, каждый — по изоэнтропе с поправкой на ηoi.
  *
- * <p>Модель работает от входа к выходам: по состоянию перед турбиной ({@code p, h}) берётся
- * энтропия, и для каждого отбора и выхлопа, у которых <b>уже известно давление</b>, считается
- * энтальпия {@code h = h_вх − ηoi·(h_вх − h_изоэнтропы(p_вых, s_вх))}. Так устроен и реальный
- * расчёт: турбина расширяет пар до давления, которое задаёт схема (режим отбора, давление в
- * конденсаторе), а не наоборот. Поэтому давления отборов — исходные данные, а энтальпии —
- * результат модели.
+ * <p>Модель идёт от входа к выходам в порядке падения давления. Для очередного отсека по
+ * состоянию <b>перед ним</b> ({@code p, h}) берётся энтропия, и энтальпия на выходе считается как
+ * {@code h_вых = h_вх − ηoi·(h_вх − h_изоэнтропы(p_вых, s_вх))}. Уже найденная энтальпия
+ * становится входом следующего отсека, поэтому теплоперепады отсеков складываются в процесс
+ * расширения, а не считаются независимо от одного и того же состояния.
  *
- * <p>Отсеки не «сцепляются» друг с другом через промежуточные энтальпии: энтропия входа одна
- * для всех выходов, потому что состояние перед каждым отсеком — это состояние перед турбиной
- * лишь при отсутствии промежуточного перегрева и потерь в тракте отбора. Как только появятся
- * промежуточный перегрев и отсеки со своими ηoi, модель станет последовательной — но и тогда
- * изменится только тело {@link #resolve}, а место в конвейере останется прежним.
+ * <p>Почему именно так. Давления отборов задаёт схема (режим отбора, подогреватели, вакуум), и
+ * турбина расширяет пар <b>до</b> этих давлений, а не наоборот: давления — исходные данные,
+ * энтальпии — результат модели. Но состояние перед вторым отсеком — это состояние после первого,
+ * и если считать все отборы от свежего пара, турбина «расширяет» один и тот же пар несколько раз:
+ * выхлоп получается перегретым на десятки кДж/кг, а суммарная мощность — завышенной. Порядок
+ * отсеков задаёт не порядок портов, а давления: порты нумеруются по ходу расширения, но модель
+ * сортирует выходы по давлению и не зависит от того, как их перечислили.
+ *
+ * <p>Неизвестное давление — это не отсек: выход без давления пропускается, потому что расширяться
+ * «до неизвестного давления» нельзя, а выдумывать его модель не станет. Известная энтальпия
+ * выхода (ГУ или расчёт подогревателя) сильнее выведенной: тогда именно она служит началом
+ * следующего отсека, а не пересчитанное значение — так заданное состояние отбора не теряется.
  *
  * <p>Неподключённый отбор — это нулевой отбор: порт без связи пропускается
- * ({@link RuleSupport#connection} возвращает {@code null} для порта без единственной связи), а
- * не считается ошибкой. Давление, которого нет, оставляет энтальпию в
- * {@link SchemeState#missing()} — выдумывать её модель не станет.
+ * ({@link RuleSupport#connection} возвращает {@code null} для порта без единственной связи), а не
+ * считается ошибкой.
  */
 final class TurbineModel implements ElementModel {
 
@@ -66,28 +72,54 @@ final class TurbineModel implements ElementModel {
             return 0;
         }
 
-        double entropy = steam.entropyPH(inletPressure, inletEnthalpy);
+        double pressure = inletPressure;
+        double enthalpy = inletEnthalpy;
         int writes = 0;
+        for (Section section : sections(element, turbine, access, inletPressure, inlet)) {
+            double entropy = steam.entropyPH(pressure, enthalpy);
+            double isentropic = steam.enthalpyPS(section.pressure(), entropy);
+            double expanded = enthalpy - efficiency * (enthalpy - isentropic);
+            writes += RuleSupport.fill(access, section.outlet(), Quantity.ENTHALPY, expanded);
+            // Известная энтальпия сильнее выведенной: тогда следующий отсек начинается с неё.
+            enthalpy = access.read(section.outlet(), Quantity.ENTHALPY);
+            pressure = section.pressure();
+        }
+        return writes;
+    }
+
+    /**
+     * Отсеки в порядке хода расширения — по убыванию давления.
+     *
+     * <p>Выход без известного давления отсеком не является, а давление отбора выше свежего пара
+     * означает, что он не отбор: там пар не расширяется. Сортировка устойчива, поэтому при равных
+     * давлениях сохраняется порядок объявления портов.
+     */
+    private static List<Section> sections(Element element, Turbine turbine, StateAccess access,
+                                          double inletPressure, Connection inlet) {
+        List<Section> sections = new ArrayList<>();
         for (Port port : outlets(turbine)) {
             Connection out = RuleSupport.connection(element, port);
             if (out == null) {
                 continue;
             }
-            Double outPressure = access.read(out, Quantity.PRESSURE);
-            if (outPressure == null) {
+            Double pressure = access.read(out, Quantity.PRESSURE);
+            if (pressure == null) {
                 continue;
             }
-            if (outPressure > inletPressure) {
+            if (pressure > inletPressure) {
                 throw new IllegalStateException("«" + element.name() + "», порт " + port.label()
                         + ": " + access.describe(out, Quantity.PRESSURE) + ", а перед турбиной "
                         + access.describe(inlet, Quantity.PRESSURE)
                         + ": пар не может расширяться до более высокого давления");
             }
-            double isentropic = steam.enthalpyPS(outPressure, entropy);
-            double enthalpy = inletEnthalpy - efficiency * (inletEnthalpy - isentropic);
-            writes += RuleSupport.fill(access, out, Quantity.ENTHALPY, enthalpy);
+            sections.add(new Section(out, pressure));
         }
-        return writes;
+        sections.sort(Comparator.comparingDouble(Section::pressure).reversed());
+        return sections;
+    }
+
+    /** Выход турбины с известным давлением — это отсек, заканчивающийся на этом выходе. */
+    private record Section(Connection outlet, double pressure) {
     }
 
     /** Выходы в порядке хода расширения: отборы, затем выхлоп. */

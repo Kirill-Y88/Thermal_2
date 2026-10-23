@@ -13,6 +13,13 @@ import java.util.List;
  * <p>В регенеративной схеме деаэратор стоит на границе трактов: перед ним конденсатный
  * тракт низкого давления, после — питательный высокого. Порты не делят его на два канала:
  * массовый баланс у деаэратора один, а давление и температура в нём задаются режимом.
+ *
+ * <p><b>Рабочее давление</b> — параметр аппарата, а не следствие давления отбора. Пар приходит
+ * в деаэратор из отбора, но по дороге дросселируется в подводящей линии и в соплах, поэтому
+ * {@code p_отбора > p_деаэратора}; равенство давлений было бы частным случаем без потерь.
+ * Рабочее давление задаёт состояние деаэрированной воды: она уходит из аппарата насыщенной при
+ * этом давлении, и без параметра водяной тракт после деаэратора не замыкается — ни давление,
+ * ни энтальпия питательной воды не следуют из остальных данных схемы.
  */
 public class Deaerator extends Device {
 
@@ -20,6 +27,9 @@ public class Deaerator extends Device {
     private final Port drainIn = inPort("drainIn", SpaceType.STEAM, 0, 3);
     private final Port waterIn = inPort("waterIn", SpaceType.WATER, 1, Integer.MAX_VALUE);
     private final Port waterOut = outPort("waterOut", SpaceType.WATER);
+
+    /** Рабочее давление в аппарате, МПа; {@code null} — не задано. */
+    private Double pressure;
 
     public Deaerator(String uname) {
         super(uname);
@@ -47,6 +57,34 @@ public class Deaerator extends Device {
     /** Деаэрированная вода (питательная). */
     public Port waterOut() {
         return waterOut;
+    }
+
+    /**
+     * Задаёт рабочее давление в деаэраторе.
+     *
+     * <p>Это давление в самом аппарате, а не в камере отбора: пар дросселируется по пути, и в
+     * расчёте {@code p_отбора} остаётся тем, что задал режим. Состояние воды на выходе —
+     * насыщенная жидкость при рабочем давлении.
+     *
+     * <p>Проверка «давление отбора выше рабочего» требует давления отбора и выполняется в модели
+     * расчётного слоя ({@code DeaeratorModel}), где это давление известно.
+     *
+     * @param pressureMPa рабочее давление, МПа
+     * @return этот деаэратор — для сборки схемы одной цепочкой
+     * @throws IllegalArgumentException если давление не положительно
+     */
+    public Deaerator withPressure(double pressureMPa) {
+        if (!(pressureMPa > 0)) {
+            throw new IllegalArgumentException("у деаэратора «" + name()
+                    + "» рабочее давление должно быть положительным: " + pressureMPa + " МПа");
+        }
+        this.pressure = pressureMPa;
+        return this;
+    }
+
+    /** Рабочее давление в аппарате, МПа; {@code null} — параметр не задан. */
+    public Double getPressure() {
+        return pressure;
     }
 
     @Override

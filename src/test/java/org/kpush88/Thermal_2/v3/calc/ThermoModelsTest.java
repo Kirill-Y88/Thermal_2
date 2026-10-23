@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.kpush88.Thermal_2.v3.Boiler;
 import org.kpush88.Thermal_2.v3.Condenser;
 import org.kpush88.Thermal_2.v3.Connection;
+import org.kpush88.Thermal_2.v3.Deaerator;
 import org.kpush88.Thermal_2.v3.Pipe;
 import org.kpush88.Thermal_2.v3.Pump;
 import org.kpush88.Thermal_2.v3.Scheme;
@@ -22,11 +23,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Термодинамические модели аппаратов: параметры конструкции превращаются в состояние.
  *
  * <p>Стенды — минимальные участки схемы вокруг одного аппарата: котёл с выходом за границу,
- * турбина с отбором и выхлопом, подогреватель с дренажом и водой, конденсатор, насос. Так
- * видно, что каждая модель делает <b>только своё</b>: котёл задаёт свежий пар, турбина считает
- * отборы по изоэнтропе, подогреватель — дренаж и недогрев, конденсатор — конденсат, насос —
- * напор и работу. Числа взяты из IF97 (24 МПа / 540 °C, отбор 3.5 МПа, вакуум 0.004 МПа) и
- * совпадают с реперными значениями {@code theory/06} и {@code theory/09}.
+ * турбина с отборами и выхлопом, подогреватель с дренажом и водой, конденсатор, насос. Так
+ * видно, что каждая модель делает <b>только своё</b>: котёл задаёт свежий пар, турбина расширяет
+ * пар по отсекам (от отбора к отбору, по изоэнтропе с поправкой на ηoi), подогреватель — дренаж и
+ * недогрев, конденсатор — конденсат, насос — напор и работу. Числа взяты из IF97 (24 МПа /
+ * 540 °C, отбор 3.5 МПа, вакуум 0.004 МПа) и совпадают с реперными значениями {@code theory/06}
+ * и {@code theory/09}.
  *
  * <p>Отдельно проверяются три правила, ради которых модели устроены именно так:
  * <ul>
@@ -50,14 +52,43 @@ class ThermoModelsTest {
     private static final double EXTRACTION_PRESSURE = 3.5;
     private static final double CONDENSER_PRESSURE = 0.004;
 
+    /** Давления второго и третьего отборов: деаэратор и ПНД (те же, что в v1). */
+    private static final double SECOND_EXTRACTION_PRESSURE = 0.6;
+    private static final double THIRD_EXTRACTION_PRESSURE = 0.12;
+
+    /**
+     * h отбора 0.6 МПа — второй отсек, от состояния отбора 3.5 МПа. Совпадает с h_д в theory/09.
+     */
+    private static final double SECOND_EXTRACTION_ENTHALPY = 2613.1356;
+
+    /** h отбора 0.12 МПа — третий отсек. */
+    private static final double THIRD_EXTRACTION_ENTHALPY = 2393.2445;
+
+    /** Рабочее давление деаэратора, МПа; давление отбора выше — пар дросселируется по пути. */
+    private static final double DEAERATOR_PRESSURE = 0.6;
+    private static final double DEAERATOR_EXTRACTION_PRESSURE = 0.7;
+
+    /** h′(0.6 МПа) — насыщенная вода на выходе деаэратора. */
+    private static final double DEAERATOR_WATER_ENTHALPY = 670.5012;
+
     /**
      * h отбора 3.5 МПа: h_вх − η·(h_вх − h_ks). Совпадает с h_с из theory/09; допуск проверок
      * 0.01 кДж/кг — точность обратных функций IF97 (энтропия берётся из пары p, h).
      */
     private static final double EXTRACTION_ENTHALPY = 2901.2580;
 
-    /** h выхлопа при 0.004 МПа. */
-    private static final double EXHAUST_ENTHALPY = 2077.5500;
+    /**
+     * h выхлопа: последний отсек 3.5 → 0.004 МПа. Считается от состояния отбора, а не от свежего
+     * пара: если все выходы расширять от входа в турбину, выхлоп получается перегретым — 2077.55
+     * вместо 2050.38.
+     */
+    private static final double EXHAUST_ENTHALPY = 2050.3797;
+
+    /**
+     * h выхлопа после трёх отборов (3.5 → 0.6 → 0.12 → 0.004 МПа): теплоперепады отсеков
+     * складываются. Совпадает с h_к из theory/09 и с расчётом v1 (2030.77).
+     */
+    private static final double SECTIONED_EXHAUST_ENTHALPY = 2030.7688;
 
     /** Допуск для величин, посчитанных через обратные функции IF97. */
     private static final double THERMO = 0.01;
@@ -153,6 +184,41 @@ class ThermoModelsTest {
         assertEquals(2, stage(report, Stage.RESOLVED).writes(), "две энтальпии");
         assertTrue(report.describe().contains("не задано: 3 величин"),
                 "незаданными остаются только расходы: " + report.describe());
+    }
+
+    @Test
+    @DisplayName("Турбина: отсеки сцепляются — каждый расширяет пар от состояния предыдущего")
+    void turbineExpandsInSections() {
+        Turbine turbine = new Turbine("Турбина", 3).withInternalEfficiency(EFFICIENCY);
+        Scheme scheme = new Scheme().add(turbine);
+        Connection live = scheme.openIn(turbine.steamIn(), "свежий пар");
+        Connection first = scheme.openOut(turbine.extractionOut(1), "отбор 1");
+        Connection second = scheme.openOut(turbine.extractionOut(2), "отбор 2");
+        Connection third = scheme.openOut(turbine.extractionOut(3), "отбор 3");
+        Connection exhaust = scheme.openOut(turbine.exhaustOut(), "выхлоп");
+        live.withState(LIVE_PRESSURE, LIVE_ENTHALPY);
+        first.setPressure(EXTRACTION_PRESSURE);
+        second.setPressure(SECOND_EXTRACTION_PRESSURE);
+        third.setPressure(THIRD_EXTRACTION_PRESSURE);
+        exhaust.setPressure(CONDENSER_PRESSURE);
+        CalculationJournal journal = CalculationJournal.of(scheme);
+
+        StateResolver.Report report = StateResolver.of(journal).resolve();
+
+        assertEquals(EXTRACTION_ENTHALPY, first.getEnthalpy(), THERMO, "отсек 24 → 3.5 МПа");
+        assertEquals(SECOND_EXTRACTION_ENTHALPY, second.getEnthalpy(), THERMO,
+                "отсек 3.5 → 0.6 МПа: вход — состояние первого отбора, а не свежий пар");
+        assertEquals(THIRD_EXTRACTION_ENTHALPY, third.getEnthalpy(), THERMO, "отсек 0.6 → 0.12 МПа");
+        assertEquals(SECTIONED_EXHAUST_ENTHALPY, exhaust.getEnthalpy(), THERMO,
+                "отсек 0.12 → 0.004 МПа");
+        assertTrue(exhaust.getEnthalpy() < third.getEnthalpy()
+                        && third.getEnthalpy() < second.getEnthalpy()
+                        && second.getEnthalpy() < first.getEnthalpy(),
+                "процесс расширения монотонен: " + first.getEnthalpy() + " → "
+                        + second.getEnthalpy() + " → " + third.getEnthalpy() + " → "
+                        + exhaust.getEnthalpy());
+        assertEquals(4, stage(report, Stage.RESOLVED).writes(), "четыре энтальпии");
+        assertEquals(5, report.missing().size(), "незаданными остаются только расходы");
     }
 
     @Test
@@ -332,6 +398,86 @@ class ThermoModelsTest {
 
         assertTrue(error.getMessage().contains("не меньше температуры насыщения"),
                 error.getMessage());
+    }
+
+    // ---------- деаэратор ----------
+
+    @Test
+    @DisplayName("Деаэратор: рабочее давление задаёт насыщенную воду на выходе")
+    void deaeratorSetsSaturatedWaterAtWorkingPressure() {
+        Deaerator deaerator = new Deaerator("Деаэратор").withPressure(DEAERATOR_PRESSURE);
+        Scheme scheme = new Scheme().add(deaerator);
+        Connection steam = scheme.openIn(deaerator.steamIn(), "греющий пар");
+        Connection water = scheme.openIn(deaerator.waterIn(), "основной конденсат");
+        Connection feedwater = scheme.openOut(deaerator.waterOut(), "питательная вода");
+        steam.withState(DEAERATOR_EXTRACTION_PRESSURE, 2625.07);
+        water.withState(DEAERATOR_EXTRACTION_PRESSURE, 600.0);
+        CalculationJournal journal = CalculationJournal.of(scheme);
+
+        StateResolver.Report report = StateResolver.of(journal).resolve();
+
+        assertEquals(DEAERATOR_PRESSURE, feedwater.getPressure(), 1e-9,
+                "давление воды — рабочее давление аппарата");
+        assertEquals(DEAERATOR_WATER_ENTHALPY, feedwater.getEnthalpy(), 1e-3, "h′(0.6 МПа)");
+        assertEquals(new Origin(Stage.RESOLVED, deaerator.name()),
+                journal.origin(feedwater, Quantity.ENTHALPY));
+        assertEquals(2, stage(report, Stage.RESOLVED).writes(),
+                "давление и энтальпия воды: паровая сторона — величина режима");
+        assertEquals(DEAERATOR_EXTRACTION_PRESSURE, steam.getPressure(), 1e-9,
+                "давление отбора не переписывается рабочим: пар дросселируется по пути");
+        assertTrue(report.missing().stream().allMatch(item -> item.quantity() == Quantity.FLOW),
+                "незаданными остаются только расходы: " + report.describe());
+    }
+
+    @Test
+    @DisplayName("Деаэратор без рабочего давления: водяной тракт за аппаратом разомкнут")
+    void deaeratorWithoutPressureLeavesWaterUnknown() {
+        Deaerator deaerator = new Deaerator("Деаэратор");
+        Scheme scheme = new Scheme().add(deaerator);
+        Connection steam = scheme.openIn(deaerator.steamIn(), "греющий пар");
+        scheme.openIn(deaerator.waterIn(), "основной конденсат");
+        Connection feedwater = scheme.openOut(deaerator.waterOut(), "питательная вода");
+        steam.withState(DEAERATOR_EXTRACTION_PRESSURE, 2625.07);
+        CalculationJournal journal = CalculationJournal.of(scheme);
+
+        StateResolver.Report report = StateResolver.of(journal).resolve();
+
+        assertNull(feedwater.getPressure(), "рабочее давление не задано — давления нет");
+        assertNull(feedwater.getEnthalpy(), "и энтальпии тоже");
+        assertEquals(0, stage(report, Stage.RESOLVED).writes());
+        assertTrue(report.missing().stream().anyMatch(item -> item.connection() == feedwater
+                && item.quantity() == Quantity.ENTHALPY), report::describe);
+    }
+
+    @Test
+    @DisplayName("Пар не поступит в деаэратор, если давление отбора не выше рабочего")
+    void deaeratorRejectsExtractionPressureBelowWorking() {
+        Deaerator deaerator = new Deaerator("Деаэратор").withPressure(DEAERATOR_PRESSURE);
+        Scheme scheme = new Scheme().add(deaerator);
+        Connection steam = scheme.openIn(deaerator.steamIn(), "греющий пар");
+        scheme.openIn(deaerator.waterIn(), "основной конденсат");
+        scheme.openOut(deaerator.waterOut(), "питательная вода");
+        steam.withState(DEAERATOR_PRESSURE - 0.1, 2625.07);
+        CalculationJournal journal = CalculationJournal.of(scheme);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> StateResolver.of(journal).resolve());
+
+        assertTrue(error.getMessage().contains("давление отбора должно быть выше рабочего"),
+                error.getMessage());
+        assertTrue(error.getMessage().contains(deaerator.name()), error.getMessage());
+    }
+
+    @Test
+    @DisplayName("Рабочее давление деаэратора должно быть положительным")
+    void deaeratorRejectsNonPositivePressure() {
+        Deaerator deaerator = new Deaerator("Деаэратор");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> deaerator.withPressure(0.0));
+
+        assertTrue(error.getMessage().contains("положительным"), error.getMessage());
+        assertNull(deaerator.getPressure(), "неверный параметр не запоминается");
     }
 
     // ---------- насос ----------

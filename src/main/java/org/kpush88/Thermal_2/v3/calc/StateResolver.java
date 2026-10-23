@@ -40,7 +40,7 @@ import java.util.Objects;
  * <p><b>Что резолвер не делает.</b> Он не решает систему уравнений: если в канале неизвестно
  * больше одного расхода, баланс не «додумывается», а остаётся в отчёте {@link Report#missing()}.
  * Поэтому после {@code SOLVED} на реальной схеме часть величин останется незаданной — это и
- * есть постановка задачи для СЛАУ.
+ * есть постановка задачи для {@link FlowSystem}, который и решает её на том же этапе.
  */
 public final class StateResolver {
 
@@ -52,7 +52,7 @@ public final class StateResolver {
     private static final List<ElementModel> DEFAULT_MODELS = List.of(
             new MassBalance(), new MixerModel(), new LineModel(), new TeeModel(),
             new BoilerModel(), new TurbineModel(), new SurfaceHeaterModel(), new CondenserModel(),
-            new PumpModel());
+            new DeaeratorModel(), new PumpModel());
 
     private final CalculationJournal journal;
     private final List<ElementModel> models;
@@ -91,8 +91,9 @@ public final class StateResolver {
      * {@code RESOLVED}. Уже зафиксированные этапы не пересчитываются — иначе снапшот перестал
      * бы быть снимком.
      *
-     * @param limit этап, на котором нужно остановиться; {@link Stage#RESULT} пока не
-     *              заполняется и трактуется как {@link Stage#SOLVED}
+     * @param limit этап, на котором нужно остановиться; {@link Stage#RESULT} здесь не
+     *              заполняется (его закрывает {@link CycleSolver}) и трактуется как
+     *              {@link Stage#SOLVED}
      * @throws IllegalStateException если модели не сошлись за ограниченное число проходов
      */
     public Report resolveTo(Stage limit) {

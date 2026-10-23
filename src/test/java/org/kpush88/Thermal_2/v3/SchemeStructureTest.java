@@ -333,6 +333,27 @@ class SchemeStructureTest {
     }
 
     @Test
+    @DisplayName("Мощность и КПД турбоагрегата — параметры режима с проверкой диапазона")
+    void electricPowerAndEfficiencyAreChecked() {
+        Turbine turbine = new Turbine("Турбина", 2);
+        assertNull(turbine.getElectricPower(), "мощность не задана по умолчанию");
+        assertNull(turbine.getElectricEfficiency(), "КПД не задан по умолчанию");
+
+        turbine.withElectricPower(1040.6).withElectricEfficiency(0.985);
+
+        assertEquals(1040.6, turbine.getElectricPower(), 1e-9);
+        assertEquals(0.985, turbine.getElectricEfficiency(), 1e-9);
+        assertThrows(IllegalArgumentException.class, () -> turbine.withElectricPower(0.0),
+                "нулевая мощность — не задание расчёта");
+        assertThrows(IllegalArgumentException.class, () -> turbine.withElectricPower(-1.0));
+        assertThrows(IllegalArgumentException.class, () -> turbine.withElectricEfficiency(0.0));
+        assertThrows(IllegalArgumentException.class, () -> turbine.withElectricEfficiency(1.2),
+                "потерь больше, чем есть мощности, не бывает");
+        assertEquals(1040.6, turbine.getElectricPower(), 1e-9,
+                "отвергнутый параметр не переписывает принятый");
+    }
+
+    @Test
     @DisplayName("Стороны аппарата не смешиваются: связи фильтруются по контуру порта")
     void surfaceHeaterKeepsSidesApart() {
         SurfaceHeater hpHeater = buildTrail().hpHeater();
