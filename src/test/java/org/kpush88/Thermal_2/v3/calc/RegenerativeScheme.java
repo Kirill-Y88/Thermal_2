@@ -105,7 +105,7 @@ final class RegenerativeScheme {
                 .withPressureRise(inputs.condensatePressure() - inputs.condenserPressure())
                 .withEfficiency(inputs.pumpEfficiency());
         Pump feedPump = new Pump("Питательный насос")
-                .withPressureRise(inputs.livePressure() - inputs.deaeratorPressure())
+                .withPressureRise(inputs.feedwaterPressure() - inputs.deaeratorPressure())
                 .withEfficiency(inputs.pumpEfficiency());
 
         Pipe live = new Pipe("Паропровод свежего пара", SpaceType.STEAM);

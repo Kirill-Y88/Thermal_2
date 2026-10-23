@@ -179,6 +179,47 @@ class CycleStagesTest {
     }
 
     @Test
+    @DisplayName("Давление питательной воды: по умолчанию p₀, задаётся отдельно — напор ПН и энтальпия растут")
+    void feedwaterPressureIsSetByStartParameters() {
+        CycleInputs referenceInputs = CycleInputs.reference();
+        RegenerativeScheme referenceBench = RegenerativeScheme.of(referenceInputs);
+        CycleResult reference = CycleSolver.of(referenceBench.scheme).calculate();
+        StageData referenceSolved = StageData.of(reference.journal(), Stage.SOLVED);
+
+        assertEquals(referenceInputs.livePressure(), referenceInputs.feedwaterPressure(), 1e-12,
+                "по умолчанию питательная вода идёт с давлением свежего пара, как в прототипе v1");
+        assertEquals(24.0, referenceSolved.value(referenceBench.feedwater, Quantity.PRESSURE),
+                1e-9, "реперное давление питательной воды — 24 МПа, как у свежего пара");
+        double referenceEnthalpy = referenceSolved.value(referenceBench.feedwater,
+                Quantity.ENTHALPY);
+
+        CycleInputs inputs = CycleInputs.builder().feedwaterPressure(31.2).build();
+        RegenerativeScheme bench = RegenerativeScheme.of(inputs);
+        CycleResult result = CycleSolver.of(bench.scheme).calculate();
+
+        print(inputs, bench, result);
+
+        StageData solved = StageData.of(result.journal(), Stage.SOLVED);
+        assertEquals(31.2, solved.value(bench.feedwater, Quantity.PRESSURE), 1e-9,
+                "заданное давление питательной воды доходит до котла");
+        assertEquals(inputs.feedwaterPressure() - inputs.deaeratorPressure(),
+                bench.feedPump.getPressureRise(), 1e-9,
+                "напор питательного насоса = p_пв − p_деаэратора");
+        assertTrue(solved.value(bench.feedwater, Quantity.ENTHALPY) > referenceEnthalpy,
+                "сжатие сильнее — энтальпия питательной воды выше: "
+                        + solved.value(bench.feedwater, Quantity.ENTHALPY)
+                        + " против " + referenceEnthalpy);
+        assertTrue(result.pumpPower() > reference.pumpPower(),
+                "выше напор — больше мощность насосов: " + result.pumpPower()
+                        + " против " + reference.pumpPower());
+        assertTrue(result.netEfficiency() < reference.netEfficiency(),
+                "работа насосов вычитается из КПД нетто: " + result.netEfficiency()
+                        + " против " + reference.netEfficiency());
+        assertEquals(result.electricPower(), result.calculatedElectricPower(), 1e-6,
+                "задание по мощности выполнено");
+    }
+
+    @Test
     @DisplayName("Несогласованные стартовые параметры отвергаются с указанием, что именно не так")
     void rejectsInconsistentParameters() {
         IllegalArgumentException deaerator = assertThrows(IllegalArgumentException.class,

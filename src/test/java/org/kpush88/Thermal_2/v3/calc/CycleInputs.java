@@ -2,8 +2,8 @@ package org.kpush88.Thermal_2.v3.calc;
 
 /**
  * Стартовые параметры цикла — всё, что в методике задаётся до расчёта: параметры свежего пара,
- * давления отборов, рабочее давление деаэратора, вакуум, КПД турбины и насосов, недогрев и
- * задание по электрической мощности.
+ * давления отборов, рабочее давление деаэратора, вакуум, давление питательной воды, КПД турбины
+ * и насосов, недогрев и задание по электрической мощности.
  *
  * <p><b>Зачем отдельный объект.</b> Стенд {@link RegenerativeScheme} собирает схему из десятка
  * чисел. Пока они константы, «другой режим» — это правка констант, то есть другой тест. Здесь
@@ -30,6 +30,7 @@ final class CycleInputs {
     private final double subcooling;
     private final double pumpEfficiency;
     private final double condensatePressure;
+    private final double feedwaterPressure;
     private final double electricPower;
     private final double electricEfficiency;
 
@@ -45,6 +46,7 @@ final class CycleInputs {
         this.subcooling = builder.subcooling;
         this.pumpEfficiency = builder.pumpEfficiency;
         this.condensatePressure = builder.condensatePressure;
+        this.feedwaterPressure = builder.feedwaterPressure;
         this.electricPower = builder.electricPower;
         this.electricEfficiency = builder.electricEfficiency;
     }
@@ -114,6 +116,19 @@ final class CycleInputs {
         return condensatePressure;
     }
 
+    /**
+     * Давление питательной воды за питательным насосом (перед ПВД и котлом), МПа.
+     *
+     * <p>Это напор питательного насоса, а не давление в деаэраторе: насос поднимает воду с
+     * {@link #deaeratorPressure()} до этого значения, и дальше вода идёт по тракту с тем же
+     * давлением. По умолчанию равно {@link #livePressure()} — так считает прототип {@code v1};
+     * если нужен запас на гидравлику котла, задаётся выше давления свежего пара
+     * ({@link Builder#feedwaterPressure(double)}).
+     */
+    double feedwaterPressure() {
+        return feedwaterPressure;
+    }
+
     /** Заданная электрическая мощность N_э, кВт. */
     double electricPower() {
         return electricPower;
@@ -131,8 +146,8 @@ final class CycleInputs {
                 + lowPressureExtraction + " МПа, деаэратор " + deaeratorPressure
                 + " МПа, конденсатор " + condenserPressure + " МПа, ηoi = " + internalEfficiency
                 + ", недогрев " + subcooling + " K, η_н = " + pumpEfficiency + ", конденсат "
-                + condensatePressure + " МПа, N_э = " + electricPower + " кВт, η_эм = "
-                + electricEfficiency;
+                + condensatePressure + " МПа, питательная вода " + feedwaterPressure
+                + " МПа, N_э = " + electricPower + " кВт, η_эм = " + electricEfficiency;
     }
 
     @Override
@@ -159,6 +174,8 @@ final class CycleInputs {
         private double subcooling = 5.0;
         private double pumpEfficiency = 0.8;
         private double condensatePressure = 1.0;
+        /** {@code NaN} — не задано явно: берётся давление свежего пара, как в прототипе v1. */
+        private double feedwaterPressure = Double.NaN;
         private double electricPower = 1040.6;
         private double electricEfficiency = 0.985;
 
@@ -229,6 +246,18 @@ final class CycleInputs {
             return this;
         }
 
+        /**
+         * Давление питательной воды за питательным насосом, МПа.
+         *
+         * <p>Если не задано, берётся давление свежего пара: так считает прототип {@code v1}, где
+         * напор питательного насоса равен {@code p₀ − p_д} и запас на гидравлику котла не
+         * моделируется. Чтобы запас был, задаётся выше {@code p₀}, например {@code 1.3 · p₀}.
+         */
+        Builder feedwaterPressure(double pressureMPa) {
+            this.feedwaterPressure = positive(pressureMPa, "давление питательной воды, МПа");
+            return this;
+        }
+
         /** Заданная электрическая мощность N_э, кВт. */
         Builder electricPower(double kilowatts) {
             this.electricPower = positive(kilowatts, "электрическая мощность N_э, кВт");
@@ -244,11 +273,23 @@ final class CycleInputs {
         /**
          * Собирает параметры и проверяет их согласованность.
          *
-         * @throws IllegalArgumentException если давления идут не по ходу расширения пара или пар
+         * <p>Если давление питательной воды не задано, оно берётся равным давлению свежего пара
+         * (так считает прототип {@code v1}). Заданное ниже давления свежего пара — ошибка: вода
+         * не может войти в котёл с давлением меньше давления пара на выходе.
+         *
+         * @throws IllegalArgumentException если давления идут не по ходу расширения пара, пар
          *                                  на деаэратор не может дросселироваться до рабочего
-         *                                  давления
+         *                                  давления или питательная вода слабее свежего пара
          */
         CycleInputs build() {
+            if (Double.isNaN(feedwaterPressure)) {
+                feedwaterPressure = livePressure;
+            }
+            if (feedwaterPressure < livePressure) {
+                throw new IllegalArgumentException("давление питательной воды ("
+                        + feedwaterPressure + " МПа) не может быть ниже давления свежего пара ("
+                        + livePressure + " МПа)");
+            }
             requireBelow(condenserPressure, lowPressureExtraction, "давление в конденсаторе",
                     "давление отбора на ПНД");
             requireBelow(lowPressureExtraction, deaeratorExtraction, "давление отбора на ПНД",
@@ -263,6 +304,8 @@ final class CycleInputs {
                     "давление основного конденсата");
             requireBelow(deaeratorPressure, condensatePressure, "рабочее давление деаэратора",
                     "давление основного конденсата");
+            requireBelow(deaeratorPressure, feedwaterPressure, "рабочее давление деаэратора",
+                    "давление питательной воды");
             return new CycleInputs(this);
         }
 
