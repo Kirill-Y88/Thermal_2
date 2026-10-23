@@ -40,10 +40,10 @@ import java.util.Set;
  * ({@link Stage#INPUT}, владелец {@value #SCHEME_INPUT_OWNER}): так загрузчик схемы может
  * заполнить ГУ обычными {@link Connection#withState}, а расчёт начать с журнала.
  *
- * <p>Пока журнал не решает систему уравнений: {@link Stage#SOLVED} и {@link Stage#RESULT}
- * объявлены, но пусты. Расходы ({@link Quantity#FLOW}) на этапах {@code INPUT} и
- * {@code RESOLVED} остаются неизвестными, и {@link #missing()} их перечисляет — по этому
- * отчёту следующий шаг и определит размер системы.
+ * <p>Пока журнал не решает систему уравнений: {@link Stage#RESULT} объявлен, но пуст, а
+ * расходы появляются только там, где массовый баланс сводится к одному неизвестному
+ * ({@link StateResolver} и {@link MassBalance}). Остальные величины остаются в
+ * {@link #missing()} — по этому отчёту следующий шаг и определит размер системы.
  */
 public final class CalculationJournal {
 
@@ -189,12 +189,15 @@ public final class CalculationJournal {
      * @param connection сечение схемы
      * @param quantity   записываемая величина
      * @param value      значение величины
+     * @return {@code true}, если величина появилась; {@code false}, если она уже была
+     * записана тем же значением и запись ничего не изменила — по этому признаку резолвер
+     * понимает, что проход ещё добавляет величины
      * @throws IllegalStateException    если этап не текущий или величина уже задана другим
      *                                  значением
      * @throws IllegalArgumentException если связь не из схемы или значение не конечное
      */
-    public void write(Stage stage, String owner, Connection connection, Quantity quantity,
-                      double value) {
+    public boolean write(Stage stage, String owner, Connection connection, Quantity quantity,
+                         double value) {
         Objects.requireNonNull(stage, "stage");
         Objects.requireNonNull(connection, "connection");
         Objects.requireNonNull(quantity, "quantity");
@@ -211,16 +214,13 @@ public final class CalculationJournal {
             throw new IllegalStateException("писать можно только в текущий этап: ожидается "
                     + expected.name() + " (" + expected.title() + "), передано " + stage.name());
         }
-        if (!known.contains(connection)) {
-            throw new IllegalArgumentException("связь «" + connection.getName()
-                    + "» не принадлежит схеме журнала");
-        }
+        requireConnection(connection);
 
         ConnectionState state = working.getOrDefault(connection, ConnectionState.empty());
         ConnectionState.Reading existing = state.reading(quantity);
         if (existing != null) {
             if (Double.compare(existing.value(), value) == 0) {
-                return;
+                return false;
             }
             throw new IllegalStateException("величина уже задана: связь «"
                     + connection.getName() + "» [" + connection.getPortsUnames() + "], "
@@ -232,6 +232,44 @@ public final class CalculationJournal {
         Origin origin = new Origin(stage, owner);
         working.put(connection, state.with(quantity, value, origin));
         quantity.write(connection, value);
+        return true;
+    }
+
+    /**
+     * Текущее значение величины — из журнала, а не из поля связи. Пока этап не зафиксирован,
+     * журнал и связь совпадают; читать через журнал нужно затем, чтобы расчёт видел ровно то,
+     * что записано с происхождением, и не мог опереться на прямое присваивание в обход него.
+     *
+     * @return значение или {@code null}, если величина ещё не задана
+     * @throws IllegalArgumentException если связь не принадлежит схеме журнала
+     */
+    public Double value(Connection connection, Quantity quantity) {
+        Objects.requireNonNull(quantity, "quantity");
+        requireConnection(connection);
+        ConnectionState state = working.get(connection);
+        return state == null ? null : state.value(quantity);
+    }
+
+    /**
+     * Происхождение величины в сечении.
+     *
+     * @return этап и владелец или {@code null}, если величина ещё не задана
+     * @throws IllegalArgumentException если связь не принадлежит схеме журнала
+     */
+    public Origin origin(Connection connection, Quantity quantity) {
+        Objects.requireNonNull(quantity, "quantity");
+        requireConnection(connection);
+        ConnectionState state = working.get(connection);
+        ConnectionState.Reading reading = state == null ? null : state.reading(quantity);
+        return reading == null ? null : reading.origin();
+    }
+
+    private void requireConnection(Connection connection) {
+        Objects.requireNonNull(connection, "connection");
+        if (!known.contains(connection)) {
+            throw new IllegalArgumentException("связь «" + connection.getName()
+                    + "» не принадлежит схеме журнала");
+        }
     }
 
     /** Записывает давление и энтальпию сечения — обычная пара «состояние известно». */
