@@ -10,9 +10,11 @@ import java.util.Set;
 /**
  * Тепловая схема: реестр элементов и связей между ними.
  *
- * <p>Схема — единственное место, где создаются связи. Связь ({@link Connection}) сразу
- * знает оба конца, поэтому ей не нужен отдельный граф: список связей и есть схема, а
- * «порты» элемента — это его связи, зарегистрированные в его же списках.
+ * <p>Схема — единственное место, где создаются связи и, значит, единственное место, где
+ * конструкция схемы может измениться. Связь ({@link Connection}) сразу знает оба
+ * <b>порта</b>, поэтому отдельный граф для уравнений не нужен и не хранится: граф потоков
+ * ({@link #flowGraph()}) выводится из портов и каналов элементов одним проходом при каждом
+ * обращении.
  *
  * <p>Сборка идёт в два шага, как это будет делать загрузчик схемы: сначала элементы
  * ({@link #add}), затем связи «выход → вход» ({@link #link}). Элемент добавляется до своих
@@ -21,12 +23,14 @@ import java.util.Set;
  *
  * <pre>{@code
  * Scheme scheme = new Scheme().add(boiler).add(liveSteamPipe).add(turbine);
- * scheme.link(boiler, HEATING_MEDIUM, liveSteamPipe, HEATING_MEDIUM, "свежий пар");
- * scheme.link(liveSteamPipe, HEATING_MEDIUM, turbine, HEATING_MEDIUM, "свежий пар");
+ * scheme.link(boiler.steamOut(), liveSteamPipe.in(), "свежий пар");
+ * scheme.link(liveSteamPipe.out(), turbine.steamIn(), "свежий пар");
  * }</pre>
  *
- * <p>Роли среды на концах связи могут различаться — это норма, а не ошибка: роль
- * определяется элементом, внутри которого находится среда.
+ * <p>Проверки при подключении: порт принадлежит зарегистрированному элементу, направление
+ * «выход → вход», на порту есть свободная кратность, контуры концов совпадают. Последние
+ * два правила — то, ради чего порты и введены: «второй патрубок» и «пар в водяной порт»
+ * отвергаются в момент сборки, а не всплывают в расчёте.
  */
 public class Scheme {
 
@@ -52,44 +56,55 @@ public class Scheme {
     /**
      * Создаёт и регистрирует связь «выход элемента {@code out} → вход элемента {@code in}».
      *
-     * @param out              элемент-источник, уже добавленный в схему
-     * @param transferTypeOut  роль среды внутри элемента-источника
-     * @param in               элемент-приёмник, уже добавленный в схему
-     * @param transferTypeIn   роль среды внутри элемента-приёмника
-     * @param uname            подпись связи: среда, начинающая участок
+     * @param out   выходной порт источника, элемент которого уже добавлен в схему
+     * @param in    входной порт приёмника, элемент которого уже добавлен в схему
+     * @param uname подпись связи: среда, начинающая участок (может быть {@code null})
      * @return созданная связь — в неё же записывается состояние потока
-     * @throws IllegalArgumentException если элемент не зарегистрирован в схеме, роли не
-     *                                  заданы или связь замкнута на одном элементе
+     * @throws IllegalArgumentException если порт не зарегистрирован в схеме, направление не
+     *                                  «выход → вход», контуры не совпадают или связь
+     *                                  замкнута на одном элементе
+     * @throws IllegalStateException    если кратность порта исчерпана
      */
-    public Connection link(Element out, HeatTransferType transferTypeOut,
-                           Element in, HeatTransferType transferTypeIn, String uname) {
-        requireElement(out);
-        requireElement(in);
-        Objects.requireNonNull(transferTypeOut, "transferTypeOut");
-        Objects.requireNonNull(transferTypeIn, "transferTypeIn");
-        return register(new Connection(uname, out, transferTypeOut, in, transferTypeIn));
+    public Connection link(Port out, Port in, String uname) {
+        requirePort(out);
+        requirePort(in);
+        requireDirection(out, PortDirection.OUT);
+        requireDirection(in, PortDirection.IN);
+        requireCapacity(out);
+        requireCapacity(in);
+        return register(new Connection(uname, out, in));
+    }
+
+    /** Связь без подписи: имя для отчётов собирается из имён элементов. */
+    public Connection link(Port out, Port in) {
+        return link(out, in, null);
     }
 
     /**
      * Создаёт связь, у которой известен только источник: выход элемента за границей схемы
-     * (вход в схему ещё не смоделирован). Диагностируется {@link #danglingConnections()},
+     * (приток в схему ещё не смоделирован). Диагностируется {@link #danglingConnections()},
      * но ошибкой не считается.
      */
-    public Connection openOut(Element out, HeatTransferType transferTypeOut, String uname) {
-        requireElement(out);
-        Objects.requireNonNull(transferTypeOut, "transferTypeOut");
-        return register(new Connection(uname, out, transferTypeOut, null, null));
+    public Connection openOut(Port out, String uname) {
+        requirePort(out);
+        requireDirection(out, PortDirection.OUT);
+        requireCapacity(out);
+        return register(new Connection(uname, out, null));
     }
 
     /**
-     * Создаёт связь, у которой известен только приёмник: вход элемента из-за границы схемы.
-     * Диагностируется {@link #danglingConnections()}, но ошибкой не считается.
+     * Создаёт связь, у которой известен только приёмник: вход элемента из-за границы схемы
+     * (например, питательная вода от внешнего источника). Диагностируется
+     * {@link #danglingConnections()}, но ошибкой не считается.
      */
-    public Connection openIn(Element in, HeatTransferType transferTypeIn, String uname) {
-        requireElement(in);
-        Objects.requireNonNull(transferTypeIn, "transferTypeIn");
-        return register(new Connection(uname, null, null, in, transferTypeIn));
+    public Connection openIn(Port in, String uname) {
+        requirePort(in);
+        requireDirection(in, PortDirection.IN);
+        requireCapacity(in);
+        return register(new Connection(uname, null, in));
     }
+
+    // ---------- содержимое схемы ----------
 
     /** Элементы схемы в порядке добавления (только чтение). */
     public List<Element> getElements() {
@@ -116,14 +131,15 @@ public class Scheme {
      * Структурные ошибки схемы; пустой список — схема собрана корректно.
      *
      * <p>Проверяется: связь зарегистрирована один раз и хотя бы к одному элементу; оба её
-     * конца принадлежат этой схеме; связь не замкнута на одном элементе; связь не соединяет
-     * два аппарата напрямую — между ними должен стоять участок трассы ({@link Line}: труба
-     * или тройник); у концов заданы роли среды; списки связей элементов не разошлись с
-     * самими связями; давление и расход не отрицательны.
+     * конца принадлежат этой схеме; связь не соединяет два аппарата напрямую — между ними
+     * должен стоять участок трассы ({@link Line}: труба или тройник); давление и расход не
+     * отрицательны; у каждого элемента сошлись списки связей и кратность портов, и каждый
+     * порт входит ровно в один канал потока ({@link Element#validate()}).
      *
      * <p>Связь с открытым концом и элемент без связей ошибкой не считаются — это граница
-     * схемы, её отдаёт {@link #danglingConnections()}. Совпадение ролей на концах связи не
-     * требуется: роль определяется элементом, внутри которого находится среда.
+     * схемы, её отдаёт {@link #danglingConnections()}. Направление портов, «петля» на одном
+     * элементе и совпадение контуров проверяются при создании связи ({@link #link}) и здесь
+     * уже невозможны.
      */
     public List<String> validate() {
         List<String> problems = new ArrayList<>();
@@ -131,38 +147,24 @@ public class Scheme {
 
         for (Connection connection : connections) {
             String name = "связь «" + connection.getName() + "» ["
-                    + connection.getElementsUnames() + "]";
+                    + connection.getPortsUnames() + "]";
             if (!seen.add(connection)) {
                 problems.add(name + " зарегистрирована в схеме дважды");
             }
             Element out = connection.getElementOut();
             Element in = connection.getElementIn();
-            if (out == null && in == null) {
-                problems.add(name + " не подключена ни к одному элементу");
-            }
             if (out != null && !elements.contains(out)) {
                 problems.add(name + " выходит из элемента «" + out.name()
                         + "», не зарегистрированного в схеме");
             }
             if (in != null && !elements.contains(in)) {
                 problems.add(name + " входит в элемент «" + in.name()
-                        + "», не зарегистрированный в схеме");
-            }
-            if (out != null && out == in) {
-                problems.add(name + " замкнута на элементе «" + out.name() + "»");
+                        + "», не зарегистрированного в схеме");
             }
             if (out != null && in != null && !(out instanceof Line) && !(in instanceof Line)) {
                 problems.add(name + " соединяет два аппарата напрямую: между элементами «"
                         + out.name() + "» и «" + in.name()
                         + "» должен стоять трубопровод (Pipe/PipeTee)");
-            }
-            if (out != null && connection.getTransferTypeOut() == null) {
-                problems.add(name + " не задаёт роль среды на выходе элемента «"
-                        + out.name() + "»");
-            }
-            if (in != null && connection.getTransferTypeIn() == null) {
-                problems.add(name + " не задаёт роль среды на входе элемента «"
-                        + in.name() + "»");
             }
             if (connection.getPressure() != null && connection.getPressure() < 0) {
                 problems.add(name + " имеет отрицательное давление: "
@@ -175,28 +177,13 @@ public class Scheme {
         }
 
         for (Element element : elements) {
-            for (Connection connection : element.getInPutConnections()) {
-                if (connection.getElementIn() != element) {
-                    problems.add("связь «" + connection.getName() + "» числится входом элемента «"
-                            + element.name() + "», но ведёт в «"
-                            + Element.describe(connection.getElementIn()) + "»");
-                }
+            for (Connection connection : element.connections()) {
                 if (!connections.contains(connection)) {
-                    problems.add("входная связь «" + connection.getName() + "» элемента «"
-                            + element.name() + "» не зарегистрирована в схеме");
+                    problems.add("связь «" + connection.getName() + "» числится у элемента «"
+                            + element.name() + "», но не зарегистрирована в схеме");
                 }
             }
-            for (Connection connection : element.getOutPutConnections()) {
-                if (connection.getElementOut() != element) {
-                    problems.add("связь «" + connection.getName() + "» числится выходом элемента «"
-                            + element.name() + "», но выходит из «"
-                            + Element.describe(connection.getElementOut()) + "»");
-                }
-                if (!connections.contains(connection)) {
-                    problems.add("выходная связь «" + connection.getName() + "» элемента «"
-                            + element.name() + "» не зарегистрирована в схеме");
-                }
-            }
+            problems.addAll(element.validate());
         }
 
         return problems;
@@ -204,20 +191,133 @@ public class Scheme {
 
     private Connection register(Connection connection) {
         connections.add(connection);
-        if (connection.getElementOut() != null) {
-            connection.getElementOut().registerOutput(connection);
+        if (connection.getPortOut() != null) {
+            connection.getPortOut().element().registerOutput(connection);
         }
-        if (connection.getElementIn() != null) {
-            connection.getElementIn().registerInput(connection);
+        if (connection.getPortIn() != null) {
+            connection.getPortIn().element().registerInput(connection);
         }
         return connection;
     }
 
-    private void requireElement(Element element) {
-        Objects.requireNonNull(element, "element");
+    // ---------- проверки при подключении ----------
+
+    private void requirePort(Port port) {
+        Objects.requireNonNull(port, "port");
+        Element element = port.element();
         if (!elements.contains(element)) {
-            throw new IllegalArgumentException("элемент «" + element.name()
-                    + "» не зарегистрирован в схеме: сначала вызовите add(...)");
+            throw new IllegalArgumentException("порт " + port.label()
+                    + " принадлежит элементу «" + element.name()
+                    + "», не зарегистрированному в схеме: сначала вызовите add(...)");
         }
+        if (!element.owns(port)) {
+            throw new IllegalArgumentException("порт " + port.label()
+                    + " не объявлен элементом «" + element.name() + "»");
+        }
+    }
+
+    private void requireDirection(Port port, PortDirection direction) {
+        if (port.direction() != direction) {
+            throw new IllegalArgumentException("порт " + port.label() + " — "
+                    + port.direction().title() + ", а связь подключается со стороны «"
+                    + direction.title() + "»");
+        }
+    }
+
+    /**
+     * Кратность порта: связь сверх объявленного максимума — ошибка сборки.
+     *
+     * <p>Проверка здесь, а не только в {@link #validate()}, потому что место ошибки известно:
+     * видно, какой порт переполнен и сколько связей он уже принял. Минимум кратности —
+     * наоборот, проверяется валидатором: незанятый обязательный порт означает неполную
+     * схему, а не ошибку конкретного вызова.
+     */
+    private void requireCapacity(Port port) {
+        int size = port.element().portSize(port);
+        if (size >= port.max()) {
+            throw new IllegalStateException("порт " + port.label() + " уже принимает " + size
+                    + " связей, а объявлено не более " + port.max()
+                    + ": для нескольких потоков нужен коллектор с большей кратностью");
+        }
+    }
+
+    // ---------- граф потоков ----------
+
+    /**
+     * Граф потоков: вершины — связи, рёбра — «входная связь → выходная связь» внутри канала
+     * элемента ({@link FlowChannel}).
+     *
+     * <p>Граф <b>не хранится</b>: он строится заново за один проход по элементам, поэтому не
+     * может разойтись с конструкцией. Число рёбер на канал = произведению числа входных
+     * связей на число выходных: у турбины (1 вход × 4 выхода) четыре ребра, у деаэратора
+     * (3 входа × 1 выход) три, у трубы одно.
+     *
+     * <p>Рёбра — только массовые: тепло между каналами внутри аппарата не ребро. Поэтому
+     * «пар греет воду» не превращается в ложный путь, а баланс каждого канала считается по
+     * его портам, без обхода графа.
+     *
+     * <p>Порядок вершин — порядок создания связей, порядок рёбер — порядок элементов,
+     * каналов и связей на портах, поэтому результат воспроизводим и годится для отчётов и
+     * нумерации неизвестных.
+     */
+    public SchemeGraph<Connection> flowGraph() {
+        SchemeGraph<Connection> graph = new SchemeGraph<>();
+        for (Connection connection : connections) {
+            graph.addVertex(connection);
+        }
+        for (Element element : elements) {
+            for (FlowChannel channel : element.flowChannels()) {
+                for (Port in : channel.in()) {
+                    List<Connection> sources = element.getInPutConnections(in);
+                    for (Port out : channel.out()) {
+                        List<Connection> targets = element.getOutPutConnections(out);
+                        for (Connection source : sources) {
+                            for (Connection target : targets) {
+                                graph.addEdge(source, target);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return graph;
+    }
+
+    /**
+     * Граф потоков одного контура: те же рёбра, у которых оба конца в этом контуре.
+     *
+     * <p>Переход контура внутри элемента ({@link FlowChannel#crossesSpaces()}) в такой граф
+     * не попадает: питательная вода кончается на входе котла, а пар начинается на его
+     * выходе. Так паровая и водяная части схемы обходятся раздельно, а место превращения
+     * остаётся в уравнении элемента, где ему и место.
+     */
+    public SchemeGraph<Connection> flowGraph(SpaceType space) {
+        Objects.requireNonNull(space, "space");
+        SchemeGraph<Connection> filtered = new SchemeGraph<>();
+        for (Connection connection : connections) {
+            if (connection.getSpace() == space) {
+                filtered.addVertex(connection);
+            }
+        }
+        for (Element element : elements) {
+            for (FlowChannel channel : element.flowChannels()) {
+                for (Port in : channel.in()) {
+                    if (in.space() != space) {
+                        continue;
+                    }
+                    for (Port out : channel.out()) {
+                        if (out.space() != space) {
+                            continue;
+                        }
+                        for (Connection source : element.getInPutConnections(in)) {
+                            for (Connection target : element.getOutPutConnections(out)) {
+                                filtered.addEdge(source, target);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return filtered;
     }
 }

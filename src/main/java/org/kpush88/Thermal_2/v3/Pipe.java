@@ -1,8 +1,7 @@
 package org.kpush88.Thermal_2.v3;
 
 /**
- * Трубопровод — участок трассы между двумя элементами: у него одна входная и одна
- * выходная связь.
+ * Трубопровод — участок трассы между двумя элементами: у него один вход и один выход.
  *
  * <p>Труба — обязательный элемент любой связи «аппарат → аппарат»: связь лишь сваривает
  * концы, поэтому котёл соединяется с турбиной через паропровод, отбор — с подогревателем
@@ -15,14 +14,34 @@ package org.kpush88.Thermal_2.v3;
  * Позже здесь появятся коэффициенты понижения давления и температуры (гидравлическое
  * сопротивление и теплопотери трассы) — именно поэтому участок трубопровода является
  * элементом, а не просто связью.
+ *
+ * <p>Контур задаётся конструктором и одинаков для обоих портов: труба не меняет контур.
  */
 public class Pipe extends Line {
 
-    public Pipe(String uname) {
-        super(uname);
+    private final Port in = inPort("in", getSpace());
+    private final Port out = outPort("out", getSpace());
+
+    public Pipe(String uname, SpaceType space) {
+        super(uname, space);
     }
 
-    public Pipe(Long id, String uname) {
-        super(id, uname);
+    public Pipe(Long id, String uname, SpaceType space) {
+        super(id, uname, space);
+    }
+
+    /** Вход трубы: единственная связь со стороны источника. */
+    public Port in() {
+        return in;
+    }
+
+    /** Выход трубы: единственная связь в сторону приёмника. */
+    public Port out() {
+        return out;
+    }
+
+    @Override
+    public ElementType elementType() {
+        return ElementType.PIPE;
     }
 }
