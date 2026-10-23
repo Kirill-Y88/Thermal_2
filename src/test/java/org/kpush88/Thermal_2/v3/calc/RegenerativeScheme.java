@@ -11,39 +11,27 @@ import org.kpush88.Thermal_2.v3.SpaceType;
 import org.kpush88.Thermal_2.v3.SurfaceHeater;
 import org.kpush88.Thermal_2.v3.Turbine;
 
+import java.util.Objects;
+
 /**
  * Стенд регенеративного цикла: котёл → турбина с тремя отборами → конденсатор → конденсатный
  * насос → ПНД → деаэратор → питательный насос → ПВД → котёл.
  *
- * <p>Это та же схема, что считает прототип {@code v1.cycle.RegenerativeCycle} (24 МПа / 540 °C,
- * отборы 3.5 / 0.6 / 0.12 МПа, вакуум 0.004 МПа, недогрев 5 K, ηoi = 0.85), с одним отличием:
- * рабочее давление деаэратора (0.6 МПа) ниже давления отбора на деаэратор (0.7 МПа), потому что
- * пар дросселируется в подводящей линии. В v1 эти давления совпадали — там дросселирования не
- * было вовсе.
+ * <p>Параметры берутся из {@link CycleInputs}: это та же схема, что считает прототип
+ * {@code v1.cycle.RegenerativeCycle} (24 МПа / 540 °C, отборы 3.5 / 0.7 / 0.12 МПа, рабочее
+ * давление деаэратора 0.6 МПа, вакуум 0.004 МПа, недогрев 5 K, ηoi = 0.85), с одним отличием от
+ * v1: там давления отбора и деаэратора совпадали — дросселирования в подводящей линии не было.
+ * Другие стартовые параметры дают другой расчёт по той же схеме ({@link #of(CycleInputs)}).
  *
- * <p>Один стенд на три проверки: СЛАУ ({@link FlowSystemTest}) берёт из него расходы, внешняя
- * итерация ({@link CycleSolverTest}) — мощности и КПД, а состояния проверяются отдельно. Схема
- * собирается заново на каждый вызов: журнал расчёта пишет в связи, и общий стенд между тестами
- * протащил бы посчитанные величины как входные данные.
+ * <p>Один стенд на несколько проверок: СЛАУ ({@link FlowSystemTest}) берёт из него расходы,
+ * внешняя итерация ({@link CycleSolverTest}) — мощности и КПД, этапы расчёта
+ * ({@link CycleStagesTest}) — состояния после каждого шага, сами модели проверяются отдельно.
+ * Схема собирается заново на каждый вызов: журнал расчёта пишет в связи, и общий стенд между
+ * тестами протащил бы посчитанные величины как входные данные.
  */
 final class RegenerativeScheme {
 
-    static final double LIVE_PRESSURE = 24.0;
-    static final double LIVE_TEMPERATURE = 540.0;
-    static final double HP_EXTRACTION_PRESSURE = 3.5;
-    static final double DEAERATOR_EXTRACTION_PRESSURE = 0.7;
-    static final double DEAERATOR_PRESSURE = 0.6;
-    static final double LP_EXTRACTION_PRESSURE = 0.12;
-    static final double CONDENSER_PRESSURE = 0.004;
-    static final double INTERNAL_EFFICIENCY = 0.85;
-    static final double SUBCOOLING = 5.0;
-    static final double PUMP_EFFICIENCY = 0.8;
-    static final double CONDENSATE_PRESSURE = 1.0;
-
-    /** Задание расчёта: мощность на клеммах генератора и КПД турбоагрегата по мощности. */
-    static final double ELECTRIC_POWER = 1040.6;
-    static final double ELECTRIC_EFFICIENCY = 0.985;
-
+    final CycleInputs inputs;
     final Scheme scheme;
     final Boiler boiler;
     final Turbine turbine;
@@ -67,7 +55,7 @@ final class RegenerativeScheme {
     /** Питательная вода перед котлом. */
     final Connection feedwater;
 
-    private RegenerativeScheme(Scheme scheme, Boiler boiler, Turbine turbine,
+    private RegenerativeScheme(CycleInputs inputs, Scheme scheme, Boiler boiler, Turbine turbine,
                                SurfaceHeater hpHeater, Deaerator deaerator,
                                SurfaceHeater lpHeater, Condenser condenser,
                                Pump condensatePump, Pump feedPump,
@@ -75,6 +63,7 @@ final class RegenerativeScheme {
                                Connection hpExtraction, Connection deaeratorExtraction,
                                Connection lpExtraction, Connection exhaust,
                                Connection condensate, Connection feedwater) {
+        this.inputs = inputs;
         this.scheme = scheme;
         this.boiler = boiler;
         this.turbine = turbine;
@@ -94,22 +83,30 @@ final class RegenerativeScheme {
         this.feedwater = feedwater;
     }
 
-    /** Стенд с параметрами, совпадающими с реперным расчётом v1. */
+    /** Стенд с реперными параметрами: теми же, что в расчёте v1. */
     static RegenerativeScheme reference() {
-        Boiler boiler = new Boiler("Котёл").withFreshSteam(LIVE_PRESSURE, LIVE_TEMPERATURE);
-        Turbine turbine = new Turbine("Турбина", 3).withInternalEfficiency(INTERNAL_EFFICIENCY)
-                .withElectricPower(ELECTRIC_POWER)
-                .withElectricEfficiency(ELECTRIC_EFFICIENCY);
-        SurfaceHeater hpHeater = new SurfaceHeater("ПВД").withSubcooling(SUBCOOLING);
-        Deaerator deaerator = new Deaerator("Деаэратор").withPressure(DEAERATOR_PRESSURE);
-        SurfaceHeater lpHeater = new SurfaceHeater("ПНД").withSubcooling(SUBCOOLING);
+        return of(CycleInputs.reference());
+    }
+
+    /** Стенд из заданных стартовых параметров: давления, температуры, КПД и задание мощности. */
+    static RegenerativeScheme of(CycleInputs inputs) {
+        Objects.requireNonNull(inputs, "inputs");
+        Boiler boiler = new Boiler("Котёл")
+                .withFreshSteam(inputs.livePressure(), inputs.liveTemperature());
+        Turbine turbine = new Turbine("Турбина", 3)
+                .withInternalEfficiency(inputs.internalEfficiency())
+                .withElectricPower(inputs.electricPower())
+                .withElectricEfficiency(inputs.electricEfficiency());
+        SurfaceHeater hpHeater = new SurfaceHeater("ПВД").withSubcooling(inputs.subcooling());
+        Deaerator deaerator = new Deaerator("Деаэратор").withPressure(inputs.deaeratorPressure());
+        SurfaceHeater lpHeater = new SurfaceHeater("ПНД").withSubcooling(inputs.subcooling());
         Condenser condenser = new Condenser("Конденсатор");
         Pump condensatePump = new Pump("Конденсатный насос")
-                .withPressureRise(CONDENSATE_PRESSURE - CONDENSER_PRESSURE)
-                .withEfficiency(PUMP_EFFICIENCY);
+                .withPressureRise(inputs.condensatePressure() - inputs.condenserPressure())
+                .withEfficiency(inputs.pumpEfficiency());
         Pump feedPump = new Pump("Питательный насос")
-                .withPressureRise(LIVE_PRESSURE - DEAERATOR_PRESSURE)
-                .withEfficiency(PUMP_EFFICIENCY);
+                .withPressureRise(inputs.livePressure() - inputs.deaeratorPressure())
+                .withEfficiency(inputs.pumpEfficiency());
 
         Pipe live = new Pipe("Паропровод свежего пара", SpaceType.STEAM);
         Pipe extraction1 = new Pipe("Паропровод отбора 1", SpaceType.STEAM);
@@ -174,12 +171,12 @@ final class RegenerativeScheme {
         scheme.link(feedwaterPipe.out(), boiler.waterIn(), "питательная вода");
 
         // 6. Режим: давления отборов и вакуум. Расходы не задаются — их решает СЛАУ.
-        hpExtraction.setPressure(HP_EXTRACTION_PRESSURE);
-        deaeratorExtraction.setPressure(DEAERATOR_EXTRACTION_PRESSURE);
-        lpExtraction.setPressure(LP_EXTRACTION_PRESSURE);
-        exhaust.setPressure(CONDENSER_PRESSURE);
+        hpExtraction.setPressure(inputs.highPressureExtraction());
+        deaeratorExtraction.setPressure(inputs.deaeratorExtraction());
+        lpExtraction.setPressure(inputs.lowPressureExtraction());
+        exhaust.setPressure(inputs.condenserPressure());
 
-        return new RegenerativeScheme(scheme, boiler, turbine, hpHeater, deaerator, lpHeater,
+        return new RegenerativeScheme(inputs, scheme, boiler, turbine, hpHeater, deaerator, lpHeater,
                 condenser, condensatePump, feedPump, liveSteam, atTurbine, hpExtraction,
                 deaeratorExtraction, lpExtraction, exhaust, condensate, feedwater);
     }

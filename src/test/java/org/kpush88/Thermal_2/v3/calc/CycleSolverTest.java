@@ -38,7 +38,7 @@ class CycleSolverTest {
         CycleResult result = CycleSolver.of(bench.scheme).calculate();
 
         assertEquals(2, result.iterations(), () -> result.describe());
-        assertEquals(RegenerativeScheme.ELECTRIC_POWER, result.calculatedElectricPower(), 1e-6,
+        assertEquals(CycleInputs.reference().electricPower(), result.calculatedElectricPower(), 1e-6,
                 "расчётная мощность совпала с заданием");
         assertTrue(Math.abs(result.deviation()) <= CycleSolver.DEFAULT_TOLERANCE,
                 () -> "σ = " + result.deviation());
