@@ -72,7 +72,7 @@ public abstract class Element {
     /**
      * Объявляет порт элемента. Вызывается один раз из конструктора класса элемента.
      *
-     * @param name      имя порта внутри элемента («waterIn», «extractionOut»)
+     * @param name      имя порта внутри элемента («waterIn», «extraction1Out»)
      * @param direction вход или выход
      * @param space     контур аппарата
      * @param min       минимальное число связей
