@@ -17,12 +17,22 @@ import java.util.List;
  * <p>Класс не наследует {@link SurfaceHeater}: у конденсатора нет {@code steamIn} и
  * {@code drainOut} (дренаж не уходит — он и есть конденсат), зато есть свой вход выхлопа.
  * Наследование потребовало бы отменять порты, а это признак неверной иерархии.
+ *
+ * <p>Параметр аппарата — <b>переохлаждение конденсата</b> ниже температуры насыщения при
+ * давлении выхлопа. Без него конденсат — насыщенная жидкость: тепло отводится охлаждающей
+ * водой ровно настолько, чтобы пар сконденсировался. Переохлаждение задаётся, когда
+ * конденсатор действительно охлаждает конденсат (или когда так задан режим), и тогда энтальпия
+ * выхода считается при {@code t_нас(p_выхлопа) − Δt}. Давление выхлопа приходит из связи:
+ * его держит режим, а не конденсатор.
  */
 public class Condenser extends Device {
 
     private final Port exhaustIn = inPort("exhaustIn", SpaceType.STEAM);
     private final Port drainIn = inPort("drainIn", SpaceType.STEAM, 0, 3);
     private final Port condensateOut = outPort("condensateOut", SpaceType.WATER);
+
+    /** Переохлаждение конденсата, K; {@code null} — конденсат на линии насыщения. */
+    private Double subcooling;
 
     public Condenser(String uname) {
         super(uname);
@@ -45,6 +55,27 @@ public class Condenser extends Device {
     /** Основной конденсат. */
     public Port condensateOut() {
         return condensateOut;
+    }
+
+    /**
+     * Задаёт переохлаждение конденсата.
+     *
+     * @param kelvin переохлаждение ниже температуры насыщения, K
+     * @return этот конденсатор — для сборки схемы одной цепочкой
+     * @throws IllegalArgumentException если переохлаждение отрицательно
+     */
+    public Condenser withSubcooling(double kelvin) {
+        if (!(kelvin >= 0)) {
+            throw new IllegalArgumentException("у конденсатора «" + name()
+                    + "» переохлаждение не может быть отрицательным: " + kelvin + " K");
+        }
+        this.subcooling = kelvin;
+        return this;
+    }
+
+    /** Переохлаждение конденсата, K; {@code null} — конденсат на линии насыщения. */
+    public Double getSubcooling() {
+        return subcooling;
     }
 
     @Override

@@ -13,11 +13,22 @@ import java.util.Objects;
  *
  * <p>Конвейер этапов тот же, что объявлен в {@link Stage}: {@code INPUT} фиксирует то, что
  * занёс загрузчик схемы; на {@code NORMALIZED} участки трассы переносят состояние;
- * на {@code RESOLVED} аппараты вычисляют то, что следует из параметров (пока — неизменность
- * энтальпии в насосе: работа насоса ещё не учитывается); на {@code SOLVED} сходятся массовые
- * балансы каналов и энтальпия смешения. Каждый этап закрывается снапшотом
- * ({@link CalculationJournal#capture}), поэтому вклад этапа всегда виден отдельно
- * ({@link SchemeState#diff}).
+ * на {@code RESOLVED} аппараты считают то, что следует из их параметров и уже известных
+ * сечений — котёл переводит давление и температуру свежего пара в энтальпию, турбина расширяет
+ * пар по изоэнтропе с поправкой на ηoi, поверхностный подогреватель даёт насыщенный дренаж и
+ * недогрев питательной воды, конденсатор — конденсат на линии насыщения, насос — напор и
+ * работу; на {@code SOLVED} сходятся массовые балансы каналов и энтальпия смешения. Каждый
+ * этап закрывается снапшотом ({@link CalculationJournal#capture}), поэтому вклад этапа всегда
+ * виден отдельно ({@link SchemeState#diff}).
+ *
+ * <p><b>Этап — порядок допуска, а не момент времени.</b> Модель не работает раньше объявленного
+ * этапа, но продолжает работать позже: на {@code RESOLVED} и {@code SOLVED} правила
+ * {@code NORMALIZED} применяются снова. Без этого цепочка не замкнулась бы: перенос по
+ * паропроводу объявлен на {@code NORMALIZED}, а котёл заполняет своё сечение только на
+ * {@code RESOLVED}, и без повторного переноса состояние свежего пара никогда не дошло бы до
+ * турбины. Запись при этом подписывается тем этапом, на котором она произошла, поэтому
+ * {@link Origin} честно отвечает на вопрос «когда величина появилась», а не «когда объявлено
+ * правило».
  *
  * <p><b>Почему проходы повторяются.</b> Модель видит только одно сечение и его соседей по
  * элементу; порядок элементов в схеме не гарантирует, что к моменту вызова всё уже известно.
@@ -33,9 +44,15 @@ import java.util.Objects;
  */
 public final class StateResolver {
 
-    /** Модели по умолчанию: сначала балансы (они дают расходы смешению), затем переносы. */
+    /**
+     * Модели по умолчанию: сначала балансы (они дают расходы смешению), затем переносы, затем
+     * аппараты. Порядок влияет только на число проходов: каждый проход пробует все модели, и
+     * проходы повторяются до неподвижной точки.
+     */
     private static final List<ElementModel> DEFAULT_MODELS = List.of(
-            new MassBalance(), new MixerModel(), new LineModel(), new TeeModel(), new PumpModel());
+            new MassBalance(), new MixerModel(), new LineModel(), new TeeModel(),
+            new BoilerModel(), new TurbineModel(), new SurfaceHeaterModel(), new CondenserModel(),
+            new PumpModel());
 
     private final CalculationJournal journal;
     private final List<ElementModel> models;
@@ -96,7 +113,14 @@ public final class StateResolver {
         return new Report(reached, results, journal.missing());
     }
 
-    /** Один этап: модели по элементам, проходы до неподвижной точки. */
+    /**
+     * Один этап: модели по элементам, проходы до неподвижной точки.
+     *
+     * <p>Пробуются все модели, объявленные не позже этого этапа: ранние повторяются, потому что
+     * аппарат мог заполнить сечение только что, а соседу по участку трассы оно нужно уже сейчас
+     * (подробнее — в описании класса). Модели поздних этапов не вызываются: порядок допуска
+     * соблюдается.
+     */
     private StageResult run(Stage stage) {
         Scheme scheme = journal.scheme();
         int bound = scheme.getConnections().size() * Quantity.values().length + 1;
@@ -108,7 +132,7 @@ public final class StateResolver {
             added = false;
             for (Element element : scheme.getElements()) {
                 for (ElementModel model : models) {
-                    if (model.stage() != stage || !model.supports(element)) {
+                    if (model.stage().isAfter(stage) || !model.supports(element)) {
                         continue;
                     }
                     StateAccess access = new StateAccess(journal, stage, element.name());

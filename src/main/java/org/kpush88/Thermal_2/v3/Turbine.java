@@ -24,9 +24,12 @@ import java.util.List;
  * через него нулевой, а «второй патрубок» на том же узле невозможен. У конденсационной
  * турбины отборов нет вовсе ({@code extractionCount = 0}).
  *
- * <p>Канал потока один (весь пар — один контур): вход питает все выходы, поэтому в графе
- * потоков из свежего пара выходит столько рёбер, сколько объявлено отборов и выхлоп. Доли
- * расходов по отборам — предмет расчёта, а не конструкции.
+ * <p>Доли расходов по отборам — предмет расчёта, а не конструкции. А вот <b>внутренний
+ * относительный КПД</b> ηoi — параметр аппарата: он определяет, насколько реальное расширение
+ * в отсеке хуже изоэнтропного, и без него модель расчётного слоя ({@code TurbineModel})
+ * не берётся считать энтальпии отборов.
+ * Давления отборов приходят из связей (их задаёт режим или подогреватели), а не из турбины:
+ * турбина расширяет пар <b>до</b> давления, которое уже определено схемой.
  */
 public class Turbine extends Device {
 
@@ -36,6 +39,9 @@ public class Turbine extends Device {
     private final List<Port> extractionOuts;
 
     private final Port exhaustOut;
+
+    /** Внутренний относительный КПД ηoi; {@code null} — не задан. */
+    private Double internalEfficiency;
 
     /**
      * @param uname           имя турбины для отчётов
@@ -86,6 +92,31 @@ public class Turbine extends Device {
     /** Выхлоп в конденсатор. */
     public Port exhaustOut() {
         return exhaustOut;
+    }
+
+    /**
+     * Задаёт внутренний относительный КПД ηoi.
+     *
+     * <p>КПД относится ко всей турбине, а не к отсеку: отсеки различаются давлениями отборов,
+     * и разные КПД по отсекам — следующий шаг (тогда параметр переедет на отсек). Пока ηoi
+     * один, потому что турбина в схеме одна и её проточная часть считается целиком.
+     *
+     * @param efficiency ηoi в долях единицы, {@code 0 < η ≤ 1}
+     * @return эта турбина — для сборки схемы одной цепочкой
+     * @throws IllegalArgumentException если КПД не попадает в (0, 1]
+     */
+    public Turbine withInternalEfficiency(double efficiency) {
+        if (!(efficiency > 0 && efficiency <= 1)) {
+            throw new IllegalArgumentException("у турбины «" + name()
+                    + "» внутренний относительный КПД должен быть в (0, 1]: " + efficiency);
+        }
+        this.internalEfficiency = efficiency;
+        return this;
+    }
+
+    /** Внутренний относительный КПД ηoi; {@code null} — параметр не задан. */
+    public Double getInternalEfficiency() {
+        return internalEfficiency;
     }
 
     @Override

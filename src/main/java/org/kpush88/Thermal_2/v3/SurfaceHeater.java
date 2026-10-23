@@ -18,6 +18,13 @@ package org.kpush88.Thermal_2.v3;
  * подогревателя и, при каскадной схеме, ещё один поток; больше — признак того, что схема
  * собрана неверно. Ограничение объявлено кратностью порта, и переполнение отвергается при
  * подключении ({@link Scheme#link}).
+ *
+ * <p>Параметр аппарата — <b>недогрев</b> питательной воды до температуры насыщения греющего
+ * пара. Он и замыкает водяную сторону: вода уходит из подогревателя с температурой
+ * {@code t_нас(p_пара) − Δt}, то есть энтальпия выхода считается без баланса тепла. Дренаж при
+ * этом — насыщенная жидкость при давлении греющего пара, потому что пар в аппарате
+ * конденсируется. Баланс тепла (сколько пара нужно, чтобы так нагреть воду) — уравнение
+ * расхода, его место в системе балансов, а не в модели состояния.
  */
 public class SurfaceHeater extends Device {
 
@@ -26,6 +33,9 @@ public class SurfaceHeater extends Device {
     private final Port drainOut = outPort("drainOut", SpaceType.STEAM);
     private final Port waterIn = inPort("waterIn", SpaceType.WATER);
     private final Port waterOut = outPort("waterOut", SpaceType.WATER);
+
+    /** Недогрев питательной воды до насыщения греющего пара, K; {@code null} — не задан. */
+    private Double subcooling;
 
     public SurfaceHeater(String uname) {
         super(uname);
@@ -58,6 +68,32 @@ public class SurfaceHeater extends Device {
     /** Нагреваемая вода на выходе. */
     public Port waterOut() {
         return waterOut;
+    }
+
+    /**
+     * Задаёт недогрев питательной воды до температуры насыщения греющего пара.
+     *
+     * <p>Недогрев — величина положительная и меньше температуры насыщения: нулевой недогрев
+     * означал бы кипение воды в трубках, а недогрев больше температуры насыщения — охлаждение
+     * вместо нагрева. Проверка второй границы требует давления и выполняется в модели
+     * расчётного слоя ({@code SurfaceHeaterModel}), где это давление известно.
+     *
+     * @param kelvin недогрев, K
+     * @return этот подогреватель — для сборки схемы одной цепочкой
+     * @throws IllegalArgumentException если недогрев отрицателен
+     */
+    public SurfaceHeater withSubcooling(double kelvin) {
+        if (!(kelvin >= 0)) {
+            throw new IllegalArgumentException("у подогревателя «" + name()
+                    + "» недогрев не может быть отрицательным: " + kelvin + " K");
+        }
+        this.subcooling = kelvin;
+        return this;
+    }
+
+    /** Недогрев питательной воды, K; {@code null} — параметр не задан. */
+    public Double getSubcooling() {
+        return subcooling;
     }
 
     @Override
