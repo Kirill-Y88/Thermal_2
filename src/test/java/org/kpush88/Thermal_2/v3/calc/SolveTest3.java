@@ -61,9 +61,9 @@ public class SolveTest3 {
 
         // Отборы: у каждого свой порт, поэтому давление задаётся связью этого отбора.
         Connection hpExtraction1 = scheme.link(turbine.extractionOut(1), extraction1.in(), "отбор 1");
-        Connection hpHeaterSteam1 = scheme.link(extraction1.out(), hpHeater2.steamIn(), "отбор 1");
+        Connection hpHeaterSteam2 = scheme.link(extraction1.out(), hpHeater2.steamIn(), "отбор 1");
         Connection hpExtraction2 = scheme.link(turbine.extractionOut(2), extraction2.in(), "отбор 2");
-        Connection hpHeaterSteam2 = scheme.link(extraction2.out(), hpHeater1.steamIn(), "отбор 2");
+        Connection hpHeaterSteam1 = scheme.link(extraction2.out(), hpHeater1.steamIn(), "отбор 2");
         Connection deaeratorExtraction = scheme.link(turbine.extractionOut(3), extraction3.in(),
                 "отбор 3");
         scheme.link(extraction3.out(), deaerator.steamIn(), "отбор 3");
@@ -143,7 +143,7 @@ public class SolveTest3 {
                 + deaeratorExtraction.getPressure() + " / " + lpExtraction.getPressure()
                 + " МПа, вакуум " + exhaust.getPressure() + " МПа");
         System.out.println("  деаэратор: " + deaerator.getPressure() + " МПа, недогрев: "
-                + hpHeater1.getSubcooling() + "_"+ hpHeater1.getSubcooling() +" K, напоры насосов: " + feedPump.getPressureRise()
+                + hpHeater1.getSubcooling() + "_"+ hpHeater2.getSubcooling() +" K, напоры насосов: " + feedPump.getPressureRise()
                 + " / " + condensatePump.getPressureRise() + " МПа");
 
         // Параметры дошли до схемы: аппараты помнят свои, связи — давления режима.
