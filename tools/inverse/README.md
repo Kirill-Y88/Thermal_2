@@ -19,6 +19,7 @@ CP=target/classes:$HOME/.m2/repository/com/hummeling/if97/2.0.0/if97-2.0.0.jar:$
 
 jshell -q --class-path "$CP" tools/inverse/InvModel.jsh tools/inverse/exp1-solve.jsh
 jshell -q --class-path "$CP" tools/inverse/InvModel.jsh tools/inverse/exp2-sensitivity.jsh tools/inverse/exp3-split.jsh
+jshell -q --class-path "$CP" tools/inverse/InvModel.jsh tools/inverse/exp4-eta-vs-dt.jsh
 ```
 
 `InvModel.jsh` всегда первый: в нём класс `Inv` (модель и наблюдения).
@@ -33,6 +34,7 @@ jshell -q --class-path "$CP" tools/inverse/InvModel.jsh tools/inverse/exp2-sensi
 | `exp1-solve.jsh` | опыт A (η_oi задан: сходимость из 5 стартов) и опыт B (η_oi = 0.82…0.88) |
 | `exp2-sensitivity.jsh` | якобиан ∂(G_к, N_э)/∂(Δt₂, Δt₃) в точке решения, число обусловленности; вложенная итерация «Δt₃ из баланса массы → остаток по мощности» для η_oi = 0.80/0.83/0.85/0.87 |
 | `exp3-split.jsh` | при замкнутой массе: как Δt₂ перераспределяет отборы ПВД-1/ПВД-2 (и почти не двигает N_э) |
+| `exp4-eta-vs-dt.jsh` | «КПД подогревателя» против недогрева: `η_п = (t_вых−t_вх)/θ` и `Q_воды/Q_пара` по каждому аппарату, тождество `η_п = 1 − Δt/θ`, сила каналов (`G_отб`, `N_э`, `t_др`) в %/K и обусловленность пары `(Δt, t_др)` |
 | `out/` | протоколы прогонов (артефакты документа, не перегенерируются тестами) |
 
 ## Протоколы
@@ -42,6 +44,7 @@ jshell -q --class-path "$CP" tools/inverse/InvModel.jsh tools/inverse/exp2-sensi
 | `out/exp1-solve.txt` | `exp1-solve.jsh` целиком |
 | `out/exp2-exp3-run.txt` | `exp2-sensitivity.jsh` + `exp3-split.jsh` |
 | `out/protocol-newton.txt` | покомпонентный протокол Ньютона из стартов (0, 0) и (10, 10) |
+| `out/eta-vs-dt.txt` | `exp4-eta-vs-dt.jsh`: «КПД» и недогрев по трём аппаратам, тождество, сила каналов |
 | `out/legacy-analytic.txt` | **отозванная** аналитическая ветка (см. §10.11 документа): её числа не подтвердились кодом |
 
 ## Главный вывод
@@ -52,3 +55,9 @@ jshell -q --class-path "$CP" tools/inverse/InvModel.jsh tools/inverse/exp2-sensi
 с η_oi — `1 K ≈ 1.1·10⁻⁴ η_oi`. Поэтому при реальной точности приборов
 недогрев определяется с погрешностью ±50 K, то есть не определяется.
 Подробности и таблицы — в `theory/10-...`.
+
+Отдельно (`exp4`): «КПД подогревателя» `η_п = (t_вых − t_вх)/(t_нас − t_вх)`
+**не является второй неизвестной** — он связан с недогревом тождеством
+`η_п = 1 − Δt/θ`, поэтому пара `(Δt, η_п)` вырождена точно. Второй параметр
+аппарата должен быть физическим: `k·F` (загрязнение, нужен второй режим по
+нагрузке) или `t_др` (охладитель дренажа).
