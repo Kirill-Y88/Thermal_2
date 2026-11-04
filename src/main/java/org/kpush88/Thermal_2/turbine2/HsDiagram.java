@@ -206,6 +206,53 @@ public final class HsDiagram {
     }
 
     /**
+     * Давление, при котором изоэнтропный перепад от {@code (pIn, hIn)} равен {@code drop}, МПа.
+     *
+     * <p>Обратная задача к {@link #isentropicDrop(double, double, double)}. Нужна в
+     * предварительном расчёте: методичка задаёт теплоперепад отсека и читает с hs-диаграммы
+     * давление и удельный объём в конце расширения. Здесь эти величины получаются расчётом,
+     * а не подстановкой с рисунка.
+     *
+     * <p>Перепад монотонно растёт при понижении давления, поэтому корень ищется бисекцией на
+     * отрезке от {@code pIn} до нижней границы насыщения IF97. Верхняя граница перепада — весь
+     * перепад до {@code 0.000612 МПа}; если задать больше, задача не имеет решения в области
+     * IF97, и метод выбрасывает исключение, а не возвращает край отрезка.
+     *
+     * @param pIn  давление на входе, МПа
+     * @param hIn  энтальпия на входе, кДж/кг
+     * @param drop изоэнтропный теплоперепад, кДж/кг
+     * @return давление в конце изоэнтропного расширения, МПа
+     */
+    public double pressureForIsentropicDrop(double pIn, double hIn, double drop) {
+        if (!(pIn > MIN_SATURATION_PRESSURE) || !Double.isFinite(pIn)) {
+            throw new IllegalArgumentException("давление на входе должно быть выше "
+                    + MIN_SATURATION_PRESSURE + " МПа: " + pIn);
+        }
+        if (!(drop > 0.0) || !Double.isFinite(drop)) {
+            throw new IllegalArgumentException("изоэнтропный теплоперепад должен быть "
+                    + "положительным: " + drop + " кДж/кг");
+        }
+        double total = isentropicDrop(pIn, hIn, MIN_SATURATION_PRESSURE);
+        if (drop >= total) {
+            throw new IllegalArgumentException("теплоперепад " + drop + " кДж/кг не "
+                    + "укладывается в изоэнтропу до " + MIN_SATURATION_PRESSURE + " МПа: "
+                    + "располагаемый перепад " + total + " кДж/кг (pIn = " + pIn
+                    + " МПа, hIn = " + hIn + " кДж/кг)");
+        }
+        double low = MIN_SATURATION_PRESSURE;
+        double high = pIn;
+        for (int step = 0; step < BISECTION_STEPS; step++) {
+            double middle = 0.5 * (low + high);
+            if (isentropicDrop(pIn, hIn, middle) > drop) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        return 0.5 * (low + high);
+    }
+
+    /**
      * Энтальпия после реального расширения с внутренним относительным КПД {@code efficiency},
      * кДж/кг: {@code h₂ = h₁ − η·H_s}.
      */

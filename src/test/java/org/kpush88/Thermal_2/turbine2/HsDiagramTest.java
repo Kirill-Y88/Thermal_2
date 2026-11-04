@@ -264,4 +264,33 @@ class HsDiagramTest {
         assertTrue(error.getMessage().contains("вне области IF97"), error.getMessage());
         assertTrue(error.getMessage().contains("1000.0"), error.getMessage());
     }
+
+    @Test
+    @DisplayName("Обратная задача: перепад 175 кДж/кг → 1.4997 МПа, перепад восстанавливается")
+    void findsPressureByIsentropicDrop() {
+        double hIn = hs.enthalpyPT(2.716, 430.0);
+
+        double pressure = hs.pressureForIsentropicDrop(2.716, hIn, 175.0);
+
+        assertEquals(1.4997, pressure, 1e-3);
+        assertEquals(175.0, hs.isentropicDrop(2.716, hIn, pressure), 1e-6,
+                "давление должно возвращать заданный перепад");
+        assertTrue(hs.pressureForIsentropicDrop(2.716, hIn, 100.0) > pressure,
+                "меньшему перепаду соответствует большее давление");
+    }
+
+    @Test
+    @DisplayName("Обратная задача вне области: перепад ≤ 0 или больше перепада до 0.000612 МПа")
+    void rejectsImpossiblePressureByDrop() {
+        double hIn = hs.enthalpyPT(2.716, 430.0);
+        double total = hs.isentropicDrop(2.716, hIn, 0.000612);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> hs.pressureForIsentropicDrop(2.716, hIn, 0.0));
+        assertThrows(IllegalArgumentException.class,
+                () -> hs.pressureForIsentropicDrop(2.716, hIn, total));
+        assertThrows(IllegalArgumentException.class,
+                () -> hs.pressureForIsentropicDrop(0.0001, hIn, 10.0));
+    }
+
 }
