@@ -5,10 +5,10 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Проектировочный расчёт турбины: каркас и предварительные этапы 2.1–2.4 методички
+ * Проектировочный расчёт турбины по разделам 2.1–2.5, 3.1–3.4 и 4.1–4.3 методички
  * {@code university/Курс турб.docx}.
  *
- * <p><b>Что уже считается.</b>
+ * <p><b>Что считается.</b>
  * <ol>
  *   <li>2.1 — экономическая мощность, давления перед турбиной и за ней, располагаемый перепад
  *       {@code H₀′} и предварительный расход {@code G′};</li>
@@ -16,13 +16,19 @@ import java.util.Locale;
  *       сопловой решётки, давление и объём за ней, площадь, парциальность и высота сопла;</li>
  *   <li>2.3 — КПД регулирующей ступени и отсеков по {@link CourseProjectEfficiency}, внутренняя
  *       работа и уточнённый расход;</li>
- *   <li>2.4 — предельная мощность одной выхлопной камеры и число выхлопов.</li>
+ *   <li>2.4 — предельная мощность одной выхлопной камеры и число выхлопов;</li>
+ *   <li>2.5 — предварительное число ступеней, диаметры, высоты лопаток и распределение
+ *       теплоперепада;</li>
+ *   <li>3.1 — детальный расчёт регулирующей ступени;</li>
+ *   <li>3.2 — детальный расчёт первой нерегулируемой ступени;</li>
+ *   <li>3.3 — детальный расчёт последних трёх ступеней;</li>
+ *   <li>3.4 — закрутка последней ступени по трём радиальным участкам;</li>
+ *   <li>4.1–4.3 — осевое усилие, прочность рабочей лопатки и диафрагмы.</li>
  * </ol>
  *
- * <p><b>Чего пока нет.</b> Разделы 2.5 (предварительное число ступеней и коррекция диаметров),
- * 3.1–3.4 (детальный расчёт решёток и закрутка последней ступени) и 4.1–4.3 (прочность) в этот
- * каркас не входят. API {@link PreliminaryResult} для них не меняется: они добавятся отдельными
- * методами и записями, а не полями «на будущее».
+ * <p>Методы 3.x и 4.x имеют две формы: без аргументов (заново выполняют 2.1–2.5) и с готовыми
+ * {@link PreliminaryResult} и {@link PreliminaryStages}. Вторая форма нужна, чтобы не повторять
+ * предварительный расчёт при построении сводного проекта.
  *
  * <p><b>Откуда берутся давления на границах отсеков.</b> Методичка читает их с hs-диаграммы.
  * Здесь они находятся обратной задачей: по известному теплоперепаду отсека
@@ -42,11 +48,13 @@ public final class TurbineDesign {
 
     private final DesignInput input;
     private final DesignAssumptions assumptions;
+    private final StageAssumptions stageAssumptions;
     private final HsDiagram hs;
 
     private TurbineDesign(Builder builder) {
         this.input = builder.input;
         this.assumptions = builder.assumptions;
+        this.stageAssumptions = builder.stageAssumptions;
         this.hs = builder.hs;
     }
 
@@ -70,6 +78,11 @@ public final class TurbineDesign {
         return assumptions;
     }
 
+    /** Допущения разбиения на ступени (раздел 2.5). */
+    public StageAssumptions stageAssumptions() {
+        return stageAssumptions;
+    }
+
     /**
      * Выполняет предварительный расчёт 2.1–2.4.
      *
@@ -82,6 +95,219 @@ public final class TurbineDesign {
         PreliminaryResult.Expansion expansion = expansion(energy, regulating, notes);
         PreliminaryResult.PowerLimit powerLimit = powerLimit(energy, expansion, notes);
         return new PreliminaryResult(energy, regulating, expansion, powerLimit, notes);
+    }
+
+    /**
+     * Выполняет расчёт 2.1–2.5: к предварительному результату добавляется разбиение на ступени.
+     *
+     * @return число ступеней, диаметры, высоты лопаток и распределение теплоперепада
+     */
+    public PreliminaryStages preliminaryStages() {
+        return preliminaryStages(preliminary());
+    }
+
+    /**
+     * Разбиение на ступени по уже посчитанному результату 2.1–2.4. Нужно, чтобы не повторять
+     * расчёт при добавлении детальных разделов 3.x поверх того же {@link PreliminaryResult}.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @return разбиение по ступеням
+     */
+    public PreliminaryStages preliminaryStages(PreliminaryResult preliminary) {
+        if (preliminary == null) {
+            throw new IllegalArgumentException("результат 2.1–2.4 не задан");
+        }
+        return StageLayoutCalculator.calculate(input, stageAssumptions, hs, preliminary);
+    }
+
+    // --- 3.1–3.4. Детальный расчёт проточной части ---
+
+    /**
+     * Раздел 3.1: детальный расчёт регулирующей ступени.
+     *
+     * @return треугольники скоростей, потери и КПД
+     */
+    public RegulatingStageDetail regulatingStageDetail() {
+        return regulatingStageDetail(preliminary());
+    }
+
+    /**
+     * Раздел 3.1 по готовому результату 2.1–2.4.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @return детальный расчёт регулирующей ступени
+     */
+    public RegulatingStageDetail regulatingStageDetail(PreliminaryResult preliminary) {
+        if (preliminary == null) {
+            throw new IllegalArgumentException("результат 2.1–2.4 не задан");
+        }
+        return DetailedStageCalculator.regulatingStage(preliminary, stageAssumptions, hs);
+    }
+
+    /**
+     * Раздел 3.2: детальный расчёт первой нерегулируемой ступени ЧВД.
+     *
+     * @return треугольники скоростей, потери и КПД
+     */
+    public StageDetail firstStageDetail() {
+        PreliminaryResult preliminary = preliminary();
+        return firstStageDetail(preliminary, preliminaryStages(preliminary));
+    }
+
+    /**
+     * Раздел 3.2 по готовому результату 2.1–2.4; разбиение 2.5 вычисляется внутри.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @return детальный расчёт первой нерегулируемой ступени
+     */
+    public StageDetail firstStageDetail(PreliminaryResult preliminary) {
+        if (preliminary == null) {
+            throw new IllegalArgumentException("результат 2.1–2.4 не задан");
+        }
+        return firstStageDetail(preliminary, preliminaryStages(preliminary));
+    }
+
+    /**
+     * Раздел 3.2 по готовым результатам 2.1–2.5.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @param stages      разбиение 2.5
+     * @return детальный расчёт первой нерегулируемой ступени
+     */
+    public StageDetail firstStageDetail(PreliminaryResult preliminary,
+                                        PreliminaryStages stages) {
+        requireCalculated(preliminary, stages);
+        return DetailedStageCalculator.firstNonRegulated(preliminary, stages,
+                stageAssumptions, hs);
+    }
+
+    /**
+     * Раздел 3.3: детальный расчёт последних трёх ступеней ЧНД.
+     *
+     * @return ступени 14, 15 и 16 в порядке прохождения пара
+     */
+    public List<StageDetail> lastStageDetails() {
+        PreliminaryResult preliminary = preliminary();
+        return lastStageDetails(preliminary, preliminaryStages(preliminary));
+    }
+
+    /**
+     * Раздел 3.3 по готовому результату 2.1–2.4; разбиение 2.5 вычисляется внутри.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @return три последние ступени
+     */
+    public List<StageDetail> lastStageDetails(PreliminaryResult preliminary) {
+        if (preliminary == null) {
+            throw new IllegalArgumentException("результат 2.1–2.4 не задан");
+        }
+        return lastStageDetails(preliminary, preliminaryStages(preliminary));
+    }
+
+    /**
+     * Раздел 3.3 по готовым результатам 2.1–2.5.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @param stages      разбиение 2.5
+     * @return три последние ступени
+     */
+    public List<StageDetail> lastStageDetails(PreliminaryResult preliminary,
+                                              PreliminaryStages stages) {
+        requireCalculated(preliminary, stages);
+        return DetailedStageCalculator.lastStages(preliminary, stages, stageAssumptions, hs);
+    }
+
+    /**
+     * Раздел 3.4: закрутка последней ступени по трём радиальным участкам.
+     *
+     * @return три сечения, расход и мощность
+     */
+    public TwistResult lastStageTwist() {
+        PreliminaryResult preliminary = preliminary();
+        return lastStageTwist(preliminary, preliminaryStages(preliminary));
+    }
+
+    /**
+     * Раздел 3.4 по готовому результату 2.1–2.4; разбиение 2.5 вычисляется внутри.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @return закрутка последней ступени
+     */
+    public TwistResult lastStageTwist(PreliminaryResult preliminary) {
+        if (preliminary == null) {
+            throw new IllegalArgumentException("результат 2.1–2.4 не задан");
+        }
+        return lastStageTwist(preliminary, preliminaryStages(preliminary));
+    }
+
+    /**
+     * Раздел 3.4 по готовым результатам 2.1–2.5.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @param stages      разбиение 2.5
+     * @return закрутка последней ступени
+     */
+    public TwistResult lastStageTwist(PreliminaryResult preliminary,
+                                      PreliminaryStages stages) {
+        requireCalculated(preliminary, stages);
+        List<StageDetail> last = DetailedStageCalculator.lastStages(preliminary, stages,
+                stageAssumptions, hs);
+        return DetailedStageCalculator.twist(last.get(last.size() - 1), stageAssumptions,
+                hs, input.rotationRpm());
+    }
+
+    // --- 4.1–4.3. Прочностные расчёты ---
+
+    /**
+     * Разделы 4.1–4.3: осевое усилие, прочность лопатки и диафрагмы.
+     *
+     * @return результаты прочностных расчётов
+     */
+    public StrengthResults strength() {
+        PreliminaryResult preliminary = preliminary();
+        return strength(preliminary, preliminaryStages(preliminary));
+    }
+
+    /**
+     * Разделы 4.1–4.3 по готовому результату 2.1–2.4; разбиение 2.5 вычисляется внутри.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @return результаты прочностных расчётов
+     */
+    public StrengthResults strength(PreliminaryResult preliminary) {
+        if (preliminary == null) {
+            throw new IllegalArgumentException("результат 2.1–2.4 не задан");
+        }
+        return strength(preliminary, preliminaryStages(preliminary));
+    }
+
+    /**
+     * Разделы 4.1–4.3 по готовым результатам 2.1–2.5.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @param stages      разбиение 2.5
+     * @return результаты прочностных расчётов
+     */
+    public StrengthResults strength(PreliminaryResult preliminary,
+                                    PreliminaryStages stages) {
+        requireCalculated(preliminary, stages);
+        StageDetail first = DetailedStageCalculator.firstNonRegulated(preliminary,
+                stages, stageAssumptions, hs);
+        List<StageDetail> last = DetailedStageCalculator.lastStages(preliminary, stages,
+                stageAssumptions, hs);
+        return StrengthCalculator.calculate(first, last.get(last.size() - 1),
+                preliminary.expansion().refinedFlowKgS(), stageAssumptions,
+                stages.totalStages());
+    }
+
+    private static void requireCalculated(PreliminaryResult preliminary,
+                                          PreliminaryStages stages) {
+        if (preliminary == null) {
+            throw new IllegalArgumentException("результат 2.1–2.4 не задан");
+        }
+        if (stages == null) {
+            throw new IllegalArgumentException("разбиение 2.5 не задано");
+        }
     }
 
     // --- 2.1. Экономическая мощность, давления, перепад и расход ---
@@ -294,6 +520,7 @@ public final class TurbineDesign {
 
         private final DesignInput input;
         private DesignAssumptions assumptions = DesignAssumptions.reference();
+        private StageAssumptions stageAssumptions = StageAssumptions.reference();
         private HsDiagram hs = new HsDiagram();
 
         private Builder(DesignInput input) {
@@ -309,6 +536,15 @@ public final class TurbineDesign {
                 throw new IllegalArgumentException("допущения расчёта не заданы");
             }
             this.assumptions = assumptions;
+            return this;
+        }
+
+        /** Заменить допущения разбиения на ступени (раздел 2.5). */
+        public Builder stageAssumptions(StageAssumptions stageAssumptions) {
+            if (stageAssumptions == null) {
+                throw new IllegalArgumentException("допущения разбиения на ступени не заданы");
+            }
+            this.stageAssumptions = stageAssumptions;
             return this;
         }
 
