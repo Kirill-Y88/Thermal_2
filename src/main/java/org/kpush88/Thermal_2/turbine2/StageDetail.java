@@ -13,11 +13,21 @@ import java.util.Locale;
  * <p>{@link #inletWetness()} и {@link #outletWetness()} — доли жидкой фазы {@code y = 1 − x}.
  * Для перегретого пара они равны нулю.
  *
- * <p>{@code E₀ = h₀ − χ·Δh_вс}: для всех ступеней, кроме последней, {@code χ = 1}. При этом
- * использованный теплоперепад равен {@code h₀} минус все потери.
+ * <p>{@code h₀* = h₀ + χ₀·C₀²/2000} — располагаемый перепад от параметров торможения.
+ * Для последующих ступеней отсека {@code C₀} берётся из выходной скорости предыдущей
+ * ступени, поэтому {@code h₀*} учитывает кинетическую энергию, перенесённую в ступень;
+ * первая ступень отсека стартует с {@code C₀ = 0}.
+ *
+ * <p>{@code E₀ = h₀* − χ·Δh_вс}: для всех ступеней, кроме последней, {@code χ = 1}. При этом
+ * использованный теплоперепад равен {@code h₀*} минус все потери.
  *
  * <p>Единицы: скорость — м/с, угол — градусы, давление — МПа, объём — м³/кг, площадь — м²,
  * длина — м, теплоперепад и потери — кДж/кг, мощность — кВт.
+ *
+ * @param heatDropKJkg             статический располагаемый перепад {@code h₀}, кДж/кг
+ * @param stagnationHeatDropKJkg   располагаемый перепад от параметров торможения {@code h₀*},
+ *                                 кДж/кг
+ * @param inletVelocityMS          скорость на входе {@code C₀}, м/с
  */
 public record StageDetail(
         int globalNumber,
@@ -28,6 +38,8 @@ public record StageDetail(
         double bladeHeightM,
         double nozzleHeightM,
         double heatDropKJkg,
+        double stagnationHeatDropKJkg,
+        double inletVelocityMS,
         double reaction,
         double admission,
         double speedRatio,
@@ -98,6 +110,12 @@ public record StageDetail(
         requirePositive(bladeHeightM, "высота рабочей лопатки");
         requirePositive(nozzleHeightM, "высота сопловой лопатки");
         requirePositive(heatDropKJkg, "располагаемый перепад ступени");
+        requirePositive(stagnationHeatDropKJkg, "располагаемый перепад от параметров торможения");
+        requireNonNegative(inletVelocityMS, "скорость входа C₀");
+        if (stagnationHeatDropKJkg < heatDropKJkg) {
+            throw new IllegalArgumentException("перепад h₀* не может быть меньше статического h₀: "
+                    + stagnationHeatDropKJkg + " < " + heatDropKJkg);
+        }
         requirePositive(circumferentialVelocityMS, "окружная скорость");
         requirePositive(nozzleTheoreticalVelocityMS, "теоретическая скорость сопла");
         requirePositive(nozzleActualVelocityMS, "действительная скорость сопла");
@@ -147,11 +165,13 @@ public record StageDetail(
     public String describe() {
         return String.format(Locale.ROOT,
                 "3.x %s (№%d): d = %.3f м, l₂ = %.4f м, h₀ = %.2f кДж/кг, "
-                        + "ρ = %.3f, C₁ = %.2f м/с, W₂ = %.2f м/с, C₂ = %.2f м/с, "
+                        + "h₀* = %.2f кДж/кг, C₀ = %.2f м/с, ρ = %.3f, "
+                        + "C₁ = %.2f м/с, W₂ = %.2f м/с, C₂ = %.2f м/с, "
                         + "E₀ = %.2f кДж/кг, η_ол = %.4f, h_i = %.2f кДж/кг, "
                         + "η_oi = %.4f, N_i = %.1f кВт",
                 name, globalNumber, meanDiameterM, bladeHeightM, heatDropKJkg,
-                reaction, nozzleActualVelocityMS, rotorActualVelocityMS,
+                stagnationHeatDropKJkg, inletVelocityMS, reaction,
+                nozzleActualVelocityMS, rotorActualVelocityMS,
                 rotorExitAbsoluteVelocityMS, availableEnergyKJkg, profileEfficiency,
                 usedHeatDropKJkg, internalEfficiency, internalPowerKW);
     }
@@ -159,6 +179,12 @@ public record StageDetail(
     private static void requirePositive(double value, String name) {
         if (!(value > 0.0) || !Double.isFinite(value)) {
             throw new IllegalArgumentException(name + " должен быть положительным: " + value);
+        }
+    }
+
+    private static void requireNonNegative(double value, String name) {
+        if (!(value >= 0.0) || !Double.isFinite(value)) {
+            throw new IllegalArgumentException(name + " не может быть отрицательной: " + value);
         }
     }
 

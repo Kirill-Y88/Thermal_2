@@ -91,6 +91,8 @@ class DetailedStageTest {
         assertEquals(1, detail.sectionNumber());
         assertEquals("ЧВД-1", detail.name());
         assertEquals(0.879, detail.meanDiameterM(), 1e-9);
+        assertEquals(0.0, detail.inletVelocityMS(), 1e-12);
+        assertEquals(detail.heatDropKJkg(), detail.stagnationHeatDropKJkg(), 1e-12);
         assertEquals(138.07, detail.circumferentialVelocityMS(), 0.01);
         assertEquals(344.22, detail.nozzleTheoreticalVelocityMS(), 0.01);
         assertEquals(322.61, detail.nozzleActualVelocityMS(), 0.01);
@@ -150,17 +152,57 @@ class DetailedStageTest {
             assertTrue(last.get(index).wetnessLossKJkg()
                     > last.get(index - 1).wetnessLossKJkg());
         }
-        assertEquals(0.7407, last.get(2).internalEfficiency(), 1e-4);
+        assertEquals(0.7248, last.get(2).internalEfficiency(), 1e-4);
         assertTrue(last.get(2).internalPowerKW() > 500.0);
     }
 
     @Test
-    @DisplayName("3.3: у последней ступени χ = 0, поэтому E₀ = h₀")
+    @DisplayName("3.3: h₀* = h₀ + C₀²/2000, C₀ переносится из C₂ предыдущей ступени")
+    void carriesInletVelocityBetweenStages() {
+        List<StageDetail> last = design.lastStageDetails(preliminary, stages);
+
+        for (StageDetail stage : last) {
+            assertEquals(stage.heatDropKJkg()
+                            + stage.inletVelocityMS() * stage.inletVelocityMS() / 2000.0,
+                    stage.stagnationHeatDropKJkg(), 1e-9,
+                    "h₀* должен включать кинетическую энергию входа");
+        }
+        assertEquals(last.get(0).rotorExitAbsoluteVelocityMS(),
+                last.get(1).inletVelocityMS(), 1e-9,
+                "C₀ ступени 15 равна C₂ ступени 14");
+        assertEquals(last.get(1).rotorExitAbsoluteVelocityMS(),
+                last.get(2).inletVelocityMS(), 1e-9,
+                "C₀ ступени 16 равна C₂ ступени 15");
+        assertTrue(last.get(0).inletVelocityMS() > 0.0,
+                "ступень 14 должна получить скорость от предыдущей ступени ЧНД");
+        assertEquals(84.94, last.get(0).stagnationHeatDropKJkg(), 0.02);
+        assertEquals(101.28, last.get(1).stagnationHeatDropKJkg(), 0.02);
+        assertEquals(118.98, last.get(2).stagnationHeatDropKJkg(), 0.02);
+    }
+
+    @Test
+    @DisplayName("3.3: сверка с курсовым проектом — h₀* 85.21/101.17/118.25, h_i 69.37/80.57/88.77")
+    void comparesWithCourseProject() {
+        List<StageDetail> last = design.lastStageDetails(preliminary, stages);
+
+        // Остаток по h_i последней ступени — известное расхождение цепочки давлений 2.5/3.3,
+        // перекрыши l₁ и μ₁, а не ошибка переноса C₀; подробности —
+        // theory/12-сверка-3.3-с-курсовым-проектом.md.
+        assertEquals(85.21, last.get(0).stagnationHeatDropKJkg(), 0.35);
+        assertEquals(101.17, last.get(1).stagnationHeatDropKJkg(), 0.2);
+        assertEquals(118.25, last.get(2).stagnationHeatDropKJkg(), 0.8);
+        assertEquals(69.37, last.get(0).usedHeatDropKJkg(), 0.7);
+        assertEquals(80.57, last.get(1).usedHeatDropKJkg(), 0.8);
+        assertEquals(88.77, last.get(2).usedHeatDropKJkg(), 2.6);
+    }
+
+    @Test
+    @DisplayName("3.3: у последней ступени χ = 0, поэтому E₀ = h₀*")
     void usesZeroExitRecoveryForLastStage() {
         StageDetail last = design.lastStageDetails(preliminary, stages).get(2);
 
-        assertEquals(last.heatDropKJkg(), last.availableEnergyKJkg(), 1e-9);
-        assertEquals(last.heatDropKJkg() - last.nozzleLossKJkg()
+        assertEquals(last.stagnationHeatDropKJkg(), last.availableEnergyKJkg(), 1e-9);
+        assertEquals(last.stagnationHeatDropKJkg() - last.nozzleLossKJkg()
                 - last.rotorLossKJkg() - last.exitLossKJkg()
                 - last.frictionLossKJkg() - last.partialLossKJkg()
                 - last.bladeLeakLossKJkg() - last.diaphragmLeakLossKJkg()

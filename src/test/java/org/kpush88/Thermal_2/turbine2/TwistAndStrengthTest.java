@@ -41,8 +41,8 @@ class TwistAndStrengthTest {
         assertEquals(6.9616, twist.totalFlowKgS(), 1e-4);
         assertEquals(6.9616, twist.designFlowKgS(), 1e-4);
         assertEquals(0.0, twist.flowDeviation(), 1e-12);
-        assertEquals(610.92, twist.totalPowerKW(), 0.5);
-        assertEquals(0.7926, twist.profileEfficiency(), 1e-4);
+        assertEquals(642.92, twist.totalPowerKW(), 0.5);
+        assertEquals(0.7762, twist.profileEfficiency(), 1e-4);
     }
 
     @Test
@@ -89,15 +89,15 @@ class TwistAndStrengthTest {
     }
 
     @Test
-    @DisplayName("4.2: σ_раст = 109.62, σ_изг = 2.06, σ = 111.68 МПа, K = 3.40")
+    @DisplayName("4.2: σ_раст = 109.62, σ_изг = 2.12, σ = 111.74 МПа, K = 3.40")
     void checksBladeStrength() {
         StrengthResults.BladeStrength blade = design.strength(preliminary, stages)
                 .blade();
 
         assertEquals(109.62, blade.tensileStressMPa(), 0.02);
-        assertEquals(2.06, blade.bendingStressMPa(), 0.03);
-        assertEquals(111.68, blade.totalStressMPa(), 0.03);
-        assertEquals(3.403, blade.safetyFactor(), 1e-3);
+        assertEquals(2.12, blade.bendingStressMPa(), 0.03);
+        assertEquals(111.74, blade.totalStressMPa(), 0.03);
+        assertEquals(3.401, blade.safetyFactor(), 1e-3);
         assertEquals(380.0, blade.yieldStrengthMPa(), 1e-12);
         assertTrue(blade.safetyFactor() >= 1.65,
                 "по методичке коэффициент запаса лопатки должен быть не меньше 1.65");

@@ -248,16 +248,18 @@ final class DetailedStageCalculator {
         PreliminaryStages.StageLayout stage = stages.chvd().stages().get(0);
         double p0 = preliminary.expansion().regulatingStageOutletPressureMPa();
         double h0 = preliminary.expansion().regulatingStageOutletEnthalpyKJkg();
-        return nonRegulatedStage(stage, 1, 1, p0, h0,
+        return nonRegulatedStage(stage, 1, 1, p0, h0, 0.0, 0.0,
                 preliminary.expansion().refinedFlowKgS(), false, false, assumptions, hs);
     }
 
     /**
      * Раздел 3.3: детальный расчёт последних трёх ступеней ЧНД.
      *
-     * <p>Ступени считаются последовательно: использованный теплоперепад предыдущей ступени
-     * вычитается из энтальпии, поэтому влажность на входе следующей ступени получается из
-     * фактического, а не предварительного процесса.
+     * <p>Ступени считаются последовательно: выходная скорость предыдущей ступени становится
+     * входной скоростью следующей ({@code C₀ = C₂}), а использованный теплоперепад вычитается
+     * из энтальпии. Поэтому и {@code h₀*}, и влажность на входе следующей ступени получаются
+     * из фактического, а не предварительного процесса. Первая ступень ЧНД стартует с
+     * {@code C₀ = 0}: вход отсека в 2.5 задан статическими параметрами.
      *
      * @param preliminary результат 2.1–2.4
      * @param stages      разбиение 2.5
@@ -274,15 +276,22 @@ final class DetailedStageCalculator {
         double flow = preliminary.expansion().refinedFlowKgS();
         double p0 = chnd.inletPressureMPa();
         double h0 = chnd.inletEnthalpyKJkg();
+        // В 2.5 вход ЧНД задан статическими параметрами, поэтому первая ступень отсека
+        // стартует с C₀ = 0; далее выходная скорость переносится внутри ЧНД.
+        double c0 = 0.0;
+        double chi0 = assumptions.geometry().exitVelocityRecovery();
         List<StageDetail> all = new ArrayList<>(chnd.stageCount());
         for (int index = 0; index < chnd.stageCount(); index++) {
             PreliminaryStages.StageLayout stage = chnd.stages().get(index);
             boolean last = index == chnd.stageCount() - 1;
             StageDetail detail = nonRegulatedStage(stage, offset + index + 1,
-                    index + 1, p0, h0, flow, true, last, assumptions, hs);
+                    index + 1, p0, h0, c0, chi0, flow, true, last, assumptions, hs);
             all.add(detail);
-            p0 = stage.outletPressureMPa();
-            h0 -= detail.usedHeatDropKJkg();
+            // Статическая энтальпия на выходе: вход + изменение кинетической энергии − h_i.
+            p0 = detail.rotorPressureMPa();
+            h0 = h0 + c0 * c0 / 2000.0 - detail.exitVelocityMS() * detail.exitVelocityMS() / 2000.0
+                    - detail.usedHeatDropKJkg();
+            c0 = detail.rotorExitAbsoluteVelocityMS();
         }
         if (all.size() < 3) {
             throw new IllegalArgumentException("для раздела 3.3 нужно не меньше трёх "
@@ -296,6 +305,8 @@ final class DetailedStageCalculator {
                                                   int sectionNumber,
                                                   double p0,
                                                   double h0,
+                                                  double c0,
+                                                  double chi0,
                                                   double flow,
                                                   boolean deriveNozzleAngle,
                                                   boolean last,
@@ -303,19 +314,25 @@ final class DetailedStageCalculator {
                                                   HsDiagram hs) {
         StageAssumptions.GeometryAssumptions geometry = assumptions.geometry();
         double h0Stage = stage.heatDropKJkg();
+        // Кинетическая энергия на входе переходит в располагаемый перепад от параметров
+        // торможения: h₀* = h₀ + χ₀·C₀²/2000. Для первой ступени отсека C₀ = 0.
+        double kinetic = c0 * c0 / 2000.0;
+        double h0Star = h0Stage + chi0 * kinetic;
+        double inletStagnationEnthalpy = h0 + kinetic;
         double diameter = stage.meanDiameterM();
         double u = stage.circumferentialSpeedMS();
         double rho = stage.reaction();
         double admission = stage.admission();
-        double h0Nozzle = (1.0 - rho) * h0Stage;
-        double h0Rotor = rho * h0Stage;
-        double fictive = Math.sqrt(2.0 * h0Stage * 1000.0);
+        double h0Nozzle = (1.0 - rho) * h0Star;
+        double h0Rotor = rho * h0Star;
+        double fictive = Math.sqrt(2.0 * h0Star * 1000.0);
         double speedRatio = u / fictive;
+        // Статическое состояние на входе задано p0 и h0; h₀* относится к торможению.
         double inletVolume = hs.volumePH(p0, h0);
         double inletWetness = wetness(hs, p0, h0);
 
-        double p1 = hs.pressureForIsentropicDrop(p0, h0, h0Nozzle);
-        double v1 = hs.volumePH(p1, h0 - h0Nozzle);
+        double p1 = hs.pressureForIsentropicDrop(p0, inletStagnationEnthalpy, h0Nozzle);
+        double v1 = hs.volumePH(p1, inletStagnationEnthalpy - h0Nozzle);
         double c1t = Math.sqrt(2.0 * h0Nozzle * 1000.0);
         double a1 = soundSpeed(p1, v1);
         double m1 = c1t / a1;
@@ -355,8 +372,9 @@ final class DetailedStageCalculator {
         double w1 = triangleSide(c1, u, alpha1);
         double beta1 = Math.asin(clamp(c1 * Math.sin(alpha1) / w1, -1.0, 1.0));
 
-        double p2 = hs.pressureForIsentropicDrop(p1, h0 - h0Nozzle, h0Rotor);
-        double v2 = hs.volumePH(p2, h0 - h0Nozzle - h0Rotor);
+        double p2 = hs.pressureForIsentropicDrop(p1,
+                inletStagnationEnthalpy - h0Nozzle, h0Rotor);
+        double v2 = hs.volumePH(p2, inletStagnationEnthalpy - h0Nozzle - h0Rotor);
         double w2t = Math.sqrt(2.0 * h0Rotor * 1000.0 + w1 * w1);
         double a2 = soundSpeed(p2, v2);
         double m2 = w2t / a2;
@@ -382,8 +400,8 @@ final class DetailedStageCalculator {
 
         double exitLoss = c2 * c2 / 2000.0;
         double chi = last ? 0.0 : geometry.exitVelocityRecovery();
-        double availableEnergy = h0Stage - chi * exitLoss;
-        double profileEfficiency = (h0Stage - nozzleLoss - rotorLoss - exitLoss)
+        double availableEnergy = h0Star - chi * exitLoss;
+        double profileEfficiency = (h0Star - nozzleLoss - rotorLoss - exitLoss)
                 / availableEnergy;
         double friction = geometry.frictionCoefficient() * diameter * diameter / area1
                 * Math.pow(speedRatio, 3.0) * availableEnergy;
@@ -411,7 +429,7 @@ final class DetailedStageCalculator {
         double wetnessLoss = wetnessCoefficient * availableEnergy;
         double totalLoss = nozzleLoss + rotorLoss + exitLoss + friction + partial
                 + bladeLeakLoss + diaphragmLeakLoss + wetnessLoss;
-        double usedHeatDrop = h0Stage - totalLoss;
+        double usedHeatDrop = h0Star - totalLoss;
         if (!(usedHeatDrop > 0.0)) {
             throw new IllegalArgumentException("потери ступени " + stage.name()
                     + " превысили её перепад: h_i = " + usedHeatDrop + " кДж/кг");
@@ -424,8 +442,9 @@ final class DetailedStageCalculator {
         double power = flow * usedHeatDrop;
 
         return new StageDetail(globalNumber, sectionNumber, stage.name(), diameter,
-                stage.rootDiameterM(), bladeHeight, nozzleHeight, h0Stage, rho, admission,
-                speedRatio, u, fictive, p0, h0, inletVolume, inletWetness, outletWetness,
+                stage.rootDiameterM(), bladeHeight, nozzleHeight, h0Stage, h0Star, c0,
+                rho, admission, speedRatio, u, fictive, p0, h0, inletVolume, inletWetness,
+                outletWetness,
                 h0Nozzle, h0Rotor, c1t, c1, Math.toDegrees(alpha1), m1, mu1, phi1, p1, v1,
                 area1, nozzleLoss, chord1, nozzlePitch, geometry.nozzlePitchRatio(),
                 nozzleCount, w2t, w2, w1, Math.toDegrees(beta1), Math.toDegrees(beta2), c2,
@@ -453,7 +472,7 @@ final class DetailedStageCalculator {
     static TwistResult twist(StageDetail last, StageAssumptions assumptions,
                              HsDiagram hs, double rotationRpm) {
         StageAssumptions.GeometryAssumptions geometry = assumptions.geometry();
-        double h0 = last.heatDropKJkg();
+        double h0 = last.stagnationHeatDropKJkg();
         double rMean = last.meanDiameterM() / 2.0;
         // Высота делится на три равных участка; их середины отстоят от среднего радиуса
         // на l₂/3. В методичке напечатано Δr = l₂/2, но при l₂ = 0.35 м это дало бы 0.175 м,
