@@ -21,6 +21,7 @@ import java.util.Locale;
  *       теплоперепада;</li>
  *   <li>3.1 — детальный расчёт регулирующей ступени;</li>
  *   <li>3.2 — детальный расчёт первой нерегулируемой ступени;</li>
+ *   <li>3.2–3.3 — детальный расчёт всех нерегулируемых ступеней;</li>
  *   <li>3.3 — детальный расчёт последних трёх ступеней;</li>
  *   <li>3.4 — закрутка последней ступени по трём радиальным участкам;</li>
  *   <li>4.1–4.3 — осевое усилие, прочность рабочей лопатки и диафрагмы.</li>
@@ -179,6 +180,46 @@ public final class TurbineDesign {
         requireCalculated(preliminary, stages);
         return DetailedStageCalculator.firstNonRegulated(preliminary, stages,
                 stageAssumptions, hs);
+    }
+
+    /**
+     * Детальный расчёт всех нерегулируемых ступеней турбины (разделы 3.2–3.3).
+     *
+     * <p>Регулирующая ступень не входит: для неё есть отдельный
+     * {@link #regulatingStageDetail()}.
+     *
+     * @return все нерегулируемые ступени в порядке прохождения пара
+     */
+    public List<StageDetail> allStageDetails() {
+        PreliminaryResult preliminary = preliminary();
+        return allStageDetails(preliminary, preliminaryStages(preliminary));
+    }
+
+    /**
+     * Детальный расчёт всех нерегулируемых ступеней по готовому результату 2.1–2.4;
+     * разбиение 2.5 вычисляется внутри.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @return все нерегулируемые ступени
+     */
+    public List<StageDetail> allStageDetails(PreliminaryResult preliminary) {
+        if (preliminary == null) {
+            throw new IllegalArgumentException("результат 2.1–2.4 не задан");
+        }
+        return allStageDetails(preliminary, preliminaryStages(preliminary));
+    }
+
+    /**
+     * Детальный расчёт всех нерегулируемых ступеней по готовым результатам 2.1–2.5.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @param stages      разбиение 2.5
+     * @return все нерегулируемые ступени
+     */
+    public List<StageDetail> allStageDetails(PreliminaryResult preliminary,
+                                             PreliminaryStages stages) {
+        requireCalculated(preliminary, stages);
+        return DetailedStageCalculator.allStages(preliminary, stages, stageAssumptions, hs);
     }
 
     /**

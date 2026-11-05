@@ -157,6 +157,41 @@ class DetailedStageTest {
     }
 
     @Test
+    @DisplayName("3.2–3.3: allStageDetails считает все нерегулируемые ступени по порядку")
+    void calculatesAllNonRegulatedStages() {
+        List<StageDetail> all = design.allStageDetails(preliminary, stages);
+
+        assertEquals(stages.totalStages(), all.size());
+        assertEquals(design.firstStageDetail(preliminary, stages), all.get(0));
+        assertEquals(design.lastStageDetails(preliminary, stages),
+                all.subList(all.size() - 3, all.size()));
+
+        int offset = 0;
+        for (PreliminaryStages.SectionLayout section : stages.sections()) {
+            List<StageDetail> sectionStages =
+                    all.subList(offset, offset + section.stageCount());
+            assertEquals(0.0, sectionStages.get(0).inletVelocityMS(), 1e-12,
+                    "первая ступень отсека стартует с C₀ = 0");
+            for (int index = 0; index < sectionStages.size(); index++) {
+                StageDetail stage = sectionStages.get(index);
+                assertEquals(offset + index + 1, stage.globalNumber());
+                assertEquals(index + 1, stage.sectionNumber());
+                assertEquals(section.name() + "-" + (index + 1), stage.name());
+                if (index > 0) {
+                    assertEquals(sectionStages.get(index - 1)
+                                    .rotorExitAbsoluteVelocityMS(),
+                            stage.inletVelocityMS(), 1e-12,
+                            "C₀ ступени должен быть равен C₂ предыдущей");
+                }
+            }
+            offset += section.stageCount();
+        }
+
+        StageDetail last = all.get(all.size() - 1);
+        assertEquals(last.stagnationHeatDropKJkg(), last.availableEnergyKJkg(), 1e-9);
+    }
+
+    @Test
     @DisplayName("3.3: h₀* = h₀ + C₀²/2000, C₀ переносится из C₂ предыдущей ступени")
     void carriesInletVelocityBetweenStages() {
         List<StageDetail> last = design.lastStageDetails(preliminary, stages);

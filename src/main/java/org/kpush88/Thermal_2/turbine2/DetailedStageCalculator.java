@@ -273,31 +273,98 @@ final class DetailedStageCalculator {
                                         HsDiagram hs) {
         PreliminaryStages.SectionLayout chnd = stages.chnd();
         int offset = stages.chvd().stageCount() + stages.chsd().stageCount();
-        double flow = preliminary.expansion().refinedFlowKgS();
-        double p0 = chnd.inletPressureMPa();
-        double h0 = chnd.inletEnthalpyKJkg();
-        // В 2.5 вход ЧНД задан статическими параметрами, поэтому первая ступень отсека
-        // стартует с C₀ = 0; далее выходная скорость переносится внутри ЧНД.
-        double c0 = 0.0;
-        double chi0 = assumptions.geometry().exitVelocityRecovery();
-        List<StageDetail> all = new ArrayList<>(chnd.stageCount());
-        for (int index = 0; index < chnd.stageCount(); index++) {
-            PreliminaryStages.StageLayout stage = chnd.stages().get(index);
-            boolean last = index == chnd.stageCount() - 1;
-            StageDetail detail = nonRegulatedStage(stage, offset + index + 1,
-                    index + 1, p0, h0, c0, chi0, flow, true, last, assumptions, hs);
-            all.add(detail);
-            // Статическая энтальпия на выходе: вход + изменение кинетической энергии − h_i.
-            p0 = detail.rotorPressureMPa();
-            h0 = h0 + c0 * c0 / 2000.0 - detail.exitVelocityMS() * detail.exitVelocityMS() / 2000.0
-                    - detail.usedHeatDropKJkg();
-            c0 = detail.rotorExitAbsoluteVelocityMS();
-        }
+        List<StageDetail> all = sectionStages(chnd, offset, false, true,
+                preliminary.expansion().refinedFlowKgS(), assumptions, hs);
         if (all.size() < 3) {
             throw new IllegalArgumentException("для раздела 3.3 нужно не меньше трёх "
                     + "ступеней ЧНД, а их " + all.size());
         }
         return List.copyOf(all.subList(all.size() - 3, all.size()));
+    }
+
+    /**
+     * Детальный расчёт всех нерегулируемых ступеней турбины.
+     *
+     * <p>Ступени обходятся в порядке прохождения пара: ЧВД → ЧСД → ЧНД. Внутри каждого отсека
+     * выходная скорость предыдущей ступени становится входной скоростью следующей
+     * ({@code C₀ = C₂}), а использованный теплоперепад вычитается из энтальпии. Первая ступень
+     * отсека стартует с {@code C₀ = 0}, потому что вход отсека в 2.5 задан статическими
+     * параметрами. Для первой ступени ЧВД угол сопловой решётки берётся из допущений
+     * (раздел 3.2), для остальных — находится из уравнения неразрывности по высоте, заданной
+     * в 2.5.
+     *
+     * <p>Регулирующая ступень сюда не входит: у неё другая конструкция (двухвенечная,
+     * с поворотной решёткой) и отдельный результат {@link RegulatingStageDetail}.
+     *
+     * @param preliminary результат 2.1–2.4
+     * @param stages      разбиение 2.5
+     * @param assumptions допущения
+     * @param hs          свойства пара
+     * @return все нерегулируемые ступени в порядке прохождения пара
+     */
+    static List<StageDetail> allStages(PreliminaryResult preliminary,
+                                       PreliminaryStages stages,
+                                       StageAssumptions assumptions,
+                                       HsDiagram hs) {
+        List<StageDetail> all = new ArrayList<>(stages.totalStages());
+        int offset = 0;
+        int sectionIndex = 0;
+        for (PreliminaryStages.SectionLayout section : stages.sections()) {
+            boolean lastSection = sectionIndex == stages.sections().size() - 1;
+            all.addAll(sectionStages(section, offset, sectionIndex == 0, lastSection,
+                    preliminary.expansion().refinedFlowKgS(), assumptions, hs));
+            offset += section.stageCount();
+            sectionIndex++;
+        }
+        if (all.size() != stages.totalStages()) {
+            throw new IllegalArgumentException("детально посчитано " + all.size()
+                    + " ступеней вместо " + stages.totalStages());
+        }
+        return List.copyOf(all);
+    }
+
+    /**
+     * Последовательно считает все ступени одного отсека.
+     *
+     * @param section                   отсек из 2.5
+     * @param offset                    число ступеней в предыдущих отсеках
+     * @param fixedNozzleAngleOnFirst   брать ли угол первой ступени из допущений (раздел 3.2)
+     * @param lastSection               является ли отсек последним в турбине
+     * @param flow                      расход пара, кг/с
+     * @param assumptions               допущения
+     * @param hs                        свойства пара
+     * @return ступени отсека в порядке прохождения пара
+     */
+    private static List<StageDetail> sectionStages(PreliminaryStages.SectionLayout section,
+                                                    int offset,
+                                                    boolean fixedNozzleAngleOnFirst,
+                                                    boolean lastSection,
+                                                    double flow,
+                                                    StageAssumptions assumptions,
+                                                    HsDiagram hs) {
+        double p0 = section.inletPressureMPa();
+        double h0 = section.inletEnthalpyKJkg();
+        // В 2.5 вход отсека задан статическими параметрами, поэтому первая ступень
+        // стартует с C₀ = 0; далее выходная скорость переносится внутри отсека.
+        double c0 = 0.0;
+        double chi0 = assumptions.geometry().exitVelocityRecovery();
+        List<StageDetail> details = new ArrayList<>(section.stageCount());
+        for (int index = 0; index < section.stageCount(); index++) {
+            PreliminaryStages.StageLayout stage = section.stages().get(index);
+            boolean last = lastSection && index == section.stageCount() - 1;
+            boolean deriveNozzleAngle = !(fixedNozzleAngleOnFirst && index == 0);
+            StageDetail detail = nonRegulatedStage(stage, offset + index + 1,
+                    index + 1, p0, h0, c0, chi0, flow, deriveNozzleAngle, last,
+                    assumptions, hs);
+            details.add(detail);
+            // Статическая энтальпия на выходе: вход + изменение кинетической энергии − h_i.
+            p0 = detail.rotorPressureMPa();
+            h0 = h0 + c0 * c0 / 2000.0
+                    - detail.exitVelocityMS() * detail.exitVelocityMS() / 2000.0
+                    - detail.usedHeatDropKJkg();
+            c0 = detail.rotorExitAbsoluteVelocityMS();
+        }
+        return details;
     }
 
     private static StageDetail nonRegulatedStage(PreliminaryStages.StageLayout stage,

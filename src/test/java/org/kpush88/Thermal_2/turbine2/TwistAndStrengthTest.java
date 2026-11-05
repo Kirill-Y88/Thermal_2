@@ -132,6 +132,8 @@ class TwistAndStrengthTest {
                 design.firstStageDetail().internalPowerKW(), 1e-9);
         assertEquals(design.lastStageDetails(preliminary, stages).get(2).internalPowerKW(),
                 design.lastStageDetails().get(2).internalPowerKW(), 1e-9);
+        assertEquals(design.allStageDetails(preliminary, stages),
+                design.allStageDetails(), "все перегрузки должны давать одинаковый результат");
         assertEquals(design.lastStageTwist(preliminary, stages).totalPowerKW(),
                 design.lastStageTwist().totalPowerKW(), 1e-9);
         assertEquals(design.strength(preliminary, stages).blade().totalStressMPa(),
