@@ -5,10 +5,8 @@ import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 
-import java.util.LinkedHashSet;
-import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
-import java.util.Set;
 
 @Getter
 @Setter
@@ -16,12 +14,10 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class ProcessFlow {
 
-    private List<Cylinder> cylinders;
-    private List<Stage> stages;
     private Turbine turbine;
 
     private FlowPoint root;
     // опционально — реестр всех узлов, чтобы не терять точки
-    private Map<Long, FlowPoint> pointsById;
+    private Map<Long, FlowPoint> pointsById = new HashMap<>();
 
 }

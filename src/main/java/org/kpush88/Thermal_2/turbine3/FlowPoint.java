@@ -11,6 +11,7 @@ import lombok.Setter;
 @RequiredArgsConstructor
 public class FlowPoint {
 
+    private Long id;
 
     private Point point;
     private FlowPoint parent;
@@ -18,7 +19,7 @@ public class FlowPoint {
     private FlowPoint nextIsentropic;
 
     // расход пара кг/с
-    private Double G;
+    private Double massFlow;
 
     //private Stage stage;
     private FlowPointType pointType;
