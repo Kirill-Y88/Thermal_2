@@ -36,43 +36,87 @@ public record PreliminaryResult(
         return text.toString();
     }
 
-    /** Этап 2.1: экономическая мощность, давления, располагаемый перепад и расход. */
+    /** Этап 2.1: узлы входа и конца изоэнтропы, давления, перепад и расход. */
     public record EnergyEstimate(
+            FlowPoint inlet,
+            FlowPoint isentropicExhaust,
             double economicPowerKW,
             double inletPressureAtValvesMPa,
-            double inletPressureAtNozzlesMPa,
             double exhaustPressureMPa,
-            double exhaustPressureWithLossMPa,
-            double inletEnthalpyKJkg,
-            double inletEntropyKJkgK,
-            double inletVolumeM3kg,
-            double isentropicExhaustEnthalpyKJkg,
-            double availableHeatDropKJkg,
-            double estimatedFlowKgS) {
+            double exhaustPressureWithLossMPa) {
 
         public EnergyEstimate {
+            if (inlet == null || isentropicExhaust == null) {
+                throw new IllegalArgumentException("точки этапа 2.1 не заданы");
+            }
+            if (inlet.getPointType() != FlowPointType.UNRESOLVED) {
+                throw new IllegalArgumentException("входная точка должна иметь тип UNRESOLVED");
+            }
+            if (isentropicExhaust.getPointType() != FlowPointType.ISENTROPIC) {
+                throw new IllegalArgumentException("конец изоэнтропы должен иметь тип ISENTROPIC");
+            }
+            if (inlet.getMassFlow() == null || !(inlet.getMassFlow() > 0.0)) {
+                throw new IllegalArgumentException("расход G′ не задан на входной точке");
+            }
             requirePositive(economicPowerKW, "N_эк");
             requirePositive(inletPressureAtValvesMPa, "P₀");
-            requirePositive(inletPressureAtNozzlesMPa, "P₀′");
             requirePositive(exhaustPressureMPa, "P_к");
             requirePositive(exhaustPressureWithLossMPa, "P_к′");
-            if (!(exhaustPressureWithLossMPa < inletPressureAtNozzlesMPa)) {
+            if (!(exhaustPressureWithLossMPa < inlet.getPoint().pressureMPa())) {
                 throw new IllegalArgumentException("P_к′ должно быть ниже P₀′");
             }
-            requirePositive(inletEnthalpyKJkg, "h₀′");
-            requirePositive(inletEntropyKJkgK, "s₀′");
-            requirePositive(inletVolumeM3kg, "V₀′");
-            requirePositive(isentropicExhaustEnthalpyKJkg, "энтальпия конца изоэнтропы");
-            requirePositive(availableHeatDropKJkg, "H₀′");
-            requirePositive(estimatedFlowKgS, "G′");
+            if (!(inlet.getPoint().enthalpyKJkg()
+                    - isentropicExhaust.getPoint().enthalpyKJkg() > 0.0)) {
+                throw new IllegalArgumentException("располагаемый перепад H₀′ не положителен");
+            }
+        }
+
+        /** Давление за клапанами P₀′, МПа. */
+        public double inletPressureAtNozzlesMPa() {
+            return inlet.getPoint().pressureMPa();
+        }
+
+        /** Температура свежего пара t₀, °C. */
+        public double inletTemperatureC() {
+            return inlet.getPoint().temperatureC();
+        }
+
+        /** Энтальпия h₀′, кДж/кг. */
+        public double inletEnthalpyKJkg() {
+            return inlet.getPoint().enthalpyKJkg();
+        }
+
+        /** Энтропия s₀′, кДж/(кг·K). */
+        public double inletEntropyKJkgK() {
+            return inlet.getPoint().entropyKJkgK();
+        }
+
+        /** Удельный объём V₀′, м³/кг. */
+        public double inletVolumeM3kg() {
+            return inlet.getPoint().volumeM3kg();
+        }
+
+        /** Энтальпия конца изоэнтропы, кДж/кг. */
+        public double isentropicExhaustEnthalpyKJkg() {
+            return isentropicExhaust.getPoint().enthalpyKJkg();
+        }
+
+        /** Располагаемый теплоперепад H₀′, кДж/кг. */
+        public double availableHeatDropKJkg() {
+            return inletEnthalpyKJkg() - isentropicExhaustEnthalpyKJkg();
+        }
+
+        /** Предварительный расход G′, кг/с. */
+        public double estimatedFlowKgS() {
+            return inlet.getMassFlow();
         }
 
         public String describe() {
             return String.format(Locale.ROOT,
                     "2.1: N_эк = %.0f кВт, P₀′ = %.4f МПа, P_к′ = %.5f МПа, "
                             + "h₀′ = %.2f кДж/кг, H₀′ = %.2f кДж/кг, G′ = %.3f кг/с",
-                    economicPowerKW, inletPressureAtNozzlesMPa, exhaustPressureWithLossMPa,
-                    inletEnthalpyKJkg, availableHeatDropKJkg, estimatedFlowKgS);
+                    economicPowerKW, inletPressureAtNozzlesMPa(), exhaustPressureWithLossMPa(),
+                    inletEnthalpyKJkg(), availableHeatDropKJkg(), estimatedFlowKgS());
         }
     }
 
@@ -121,49 +165,79 @@ public record PreliminaryResult(
         }
     }
 
-    /** Этап 2.3: КПД элементов, внутренняя работа и уточнённый расход. */
+    /** Этап 2.3: процесс расширения в узлах, КПД элементов и уточнённый расход. */
     public record Expansion(
+            ExpansionProcess process,
             CourseProjectEfficiency.RegulatingEstimate regulating,
             CourseProjectEfficiency.SectionEstimate chvd,
             CourseProjectEfficiency.SectionEstimate chsd,
             CourseProjectEfficiency.SectionEstimate chnd,
-            double regulatingStageOutletPressureMPa,
-            double regulatingStageOutletEnthalpyKJkg,
-            double regulatingStageOutletVolumeM3kg,
-            double chvdOutletPressureMPa,
-            double chvdOutletVolumeM3kg,
-            double chsdOutletPressureMPa,
-            double chsdOutletVolumeM3kg,
-            double exhaustVolumeM3kg,
-            double exhaustActualVolumeM3kg,
             double internalWorkKJkg,
             double refinedFlowKgS,
             double turbineEfficiency) {
 
         public Expansion {
-            if (regulating == null || chvd == null || chsd == null || chnd == null) {
+            if (process == null || regulating == null || chvd == null || chsd == null
+                    || chnd == null) {
                 throw new IllegalArgumentException("оценка элементов турбины неполна");
             }
-            requirePositive(regulatingStageOutletPressureMPa, "P₂^рс");
-            requirePositive(regulatingStageOutletEnthalpyKJkg, "h₂^рс");
-            requirePositive(regulatingStageOutletVolumeM3kg, "V₂^рс");
-            requirePositive(chvdOutletPressureMPa, "P_ЧВД");
-            requirePositive(chvdOutletVolumeM3kg, "V_ЧВД");
-            requirePositive(chsdOutletPressureMPa, "P_ЧСД");
-            requirePositive(chsdOutletVolumeM3kg, "V_ЧСД");
-            requirePositive(exhaustVolumeM3kg, "V_выхл");
-            requirePositive(exhaustActualVolumeM3kg, "V_выхл действ.");
             requirePositive(internalWorkKJkg, "h_i");
             requirePositive(refinedFlowKgS, "G");
             requireEfficiency(turbineEfficiency, "η_oi");
         }
 
+        /** Давление P₂^рс, МПа. */
+        public double regulatingStageOutletPressureMPa() {
+            return process.regulatingStageOutlet().getPoint().pressureMPa();
+        }
+
+        /** Энтальпия h₂^рс, кДж/кг. */
+        public double regulatingStageOutletEnthalpyKJkg() {
+            return process.regulatingStageOutlet().getPoint().enthalpyKJkg();
+        }
+
+        /** Удельный объём V₂^рс, м³/кг. */
+        public double regulatingStageOutletVolumeM3kg() {
+            return process.regulatingStageOutlet().getPoint().volumeM3kg();
+        }
+
+        /** Давление за ЧВД, МПа. */
+        public double chvdOutletPressureMPa() {
+            return process.chvdOutlet().getPoint().pressureMPa();
+        }
+
+        /** Удельный объём за ЧВД, м³/кг. */
+        public double chvdOutletVolumeM3kg() {
+            return process.chvdOutlet().getPoint().volumeM3kg();
+        }
+
+        /** Давление за ЧСД, МПа. */
+        public double chsdOutletPressureMPa() {
+            return process.chsdOutlet().getPoint().pressureMPa();
+        }
+
+        /** Удельный объём за ЧСД, м³/кг. */
+        public double chsdOutletVolumeM3kg() {
+            return process.chsdOutlet().getPoint().volumeM3kg();
+        }
+
+        /** Объём в конце изоэнтропы ЧНД, м³/кг. */
+        public double exhaustVolumeM3kg() {
+            return process.chndIsentropic().getPoint().volumeM3kg();
+        }
+
+        /** Фактический объём на выхлопе, м³/кг. */
+        public double exhaustActualVolumeM3kg() {
+            return process.exhaust().getPoint().volumeM3kg();
+        }
+
         public String describe() {
-            return String.format(Locale.ROOT,
+            String summary = String.format(Locale.ROOT,
                     "2.3: η_рс = %.4f, η_ЧВД = %.4f, η_ЧСД = %.4f, η_ЧНД = %.4f, "
                             + "h_i = %.2f кДж/кг, G = %.3f кг/с, η_oi = %.4f",
                     regulating.efficiency(), chvd.efficiency(), chsd.efficiency(),
                     chnd.efficiency(), internalWorkKJkg, refinedFlowKgS, turbineEfficiency);
+            return summary + System.lineSeparator() + process.describe();
         }
     }
 

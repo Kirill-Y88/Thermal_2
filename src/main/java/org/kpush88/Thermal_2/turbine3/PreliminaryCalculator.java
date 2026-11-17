@@ -5,10 +5,13 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Предварительный расчёт турбины: разделы 2.1–2.4 методички.
+ * Предварительный расчёт турбины: разделы 2.1–2.4 методички {@code university/Курс турб.docx}.
  *
  * <p>Класс без состояния: {@link #calculate} возвращает {@link PreliminaryResult}, а все
- * промежуточные величины собраны в записях результата для проверки.
+ * промежуточные величины собраны в записях результата для проверки. Сами формулы вынесены в
+ * {@link CourseProjectFormulas}; здесь остаются только связи между этапами, обращение к
+ * h-s диаграмме и построение графа процесса расширения. КПД отсеков и регулирующей ступени
+ * рассчитываются через {@link CourseProjectEfficiency} (разд. 2.3).
  */
 public final class PreliminaryCalculator {
 
@@ -34,29 +37,30 @@ public final class PreliminaryCalculator {
                                                                    DesignAssumptions assumptions,
                                                                    HsDiagram hs) {
         double p0 = input.inletPressureMPa();
-        double p0Prime = assumptions.valvePressureFactor() * p0;
-        double exitRatio = assumptions.exhaustVelocityMS() / 100.0;
-        double pkPrime = input.exhaustPressureMPa()
-                * (1.0 + assumptions.exhaustLossCoefficient() * exitRatio * exitRatio);
+        double p0Prime = CourseProjectFormulas.valvePressure(p0,
+                assumptions.valvePressureFactor());
+        double pkPrime = CourseProjectFormulas.exhaustPressureWithLoss(
+                input.exhaustPressureMPa(), assumptions.exhaustVelocityMS(),
+                assumptions.exhaustLossCoefficient());
         if (!(pkPrime < p0Prime)) {
             throw new IllegalArgumentException("после клапанов давление P₀′ = " + p0Prime
                     + " МПа должно быть выше P_к′ = " + pkPrime + " МПа");
         }
-        double h0Prime = hs.enthalpyPT(p0Prime, input.inletTemperatureC());
-        double s0Prime = hs.entropyPT(p0Prime, input.inletTemperatureC());
+        Point inletState = hs.pointPT(p0Prime, input.inletTemperatureC());
+        double h0Prime = inletState.enthalpyKJkg();
+        double s0Prime = inletState.entropyKJkgK();
         double h2s = hs.enthalpyPS(pkPrime, s0Prime);
-        double availableDrop = h0Prime - h2s;
-        if (!(availableDrop > 0.0)) {
-            throw new IllegalArgumentException("располагаемый перепад H₀′ не положителен: "
-                    + availableDrop + " кДж/кг");
-        }
-        double v0Prime = hs.volumePH(p0Prime, h0Prime);
-        double economicPower = assumptions.economicPowerFactor() * input.nominalPowerMW() * 1000.0;
-        double flow = CourseProjectEfficiency.flow(economicPower, availableDrop,
+        double availableDrop = CourseProjectFormulas.availableHeatDrop(h0Prime, h2s);
+        double economicPower = CourseProjectFormulas.economicPower(
+                input.nominalPowerMW() * 1000.0, assumptions.economicPowerFactor());
+        double flow = CourseProjectFormulas.estimatedFlow(economicPower, availableDrop,
                 assumptions.electricalEfficiency());
-        return new PreliminaryResult.EnergyEstimate(economicPower, p0, p0Prime,
-                input.exhaustPressureMPa(), pkPrime, h0Prime, s0Prime, v0Prime, h2s,
-                availableDrop, flow);
+        FlowPoint inlet = FlowPoint.actual(inletState);
+        inlet.setMassFlow(flow);
+        FlowPoint isentropicExhaust = FlowPoint.isentropic(hs.pointPH(pkPrime, h2s));
+        isentropicExhaust.setMassFlow(flow);
+        return new PreliminaryResult.EnergyEstimate(inlet, isentropicExhaust, economicPower, p0,
+                input.exhaustPressureMPa(), pkPrime);
     }
 
     // --- 2.2. Регулирующая ступень ---
@@ -69,34 +73,26 @@ public final class PreliminaryCalculator {
             throw new IllegalArgumentException("теплоперепад регулирующей ступени должен быть "
                     + "меньше располагаемого перепада турбины");
         }
-        double fictiveVelocity = Math.sqrt(2.0 * heatDrop * 1000.0);
-        double circumferential = fictiveVelocity * assumptions.regulatingSpeedRatio();
-        double meanDiameter = 60.0 * circumferential / (Math.PI * input.rotationRpm());
-        if (!(meanDiameter > 0.0)) {
-            throw new IllegalArgumentException("средний диаметр регулирующей ступени не "
-                    + "положителен: " + meanDiameter + " м");
-        }
-        double nozzleHeatDrop = (1.0 - assumptions.regulatingReaction()) * heatDrop;
-        double nozzleVelocity = Math.sqrt(2.0 * nozzleHeatDrop * 1000.0);
+        double fictiveVelocity = CourseProjectFormulas.fictiveVelocity(heatDrop);
+        double circumferential = CourseProjectFormulas.circumferentialVelocity(
+                fictiveVelocity, assumptions.regulatingSpeedRatio());
+        double meanDiameter = CourseProjectFormulas.regulatingMeanDiameter(
+                circumferential, input.rotationRpm());
+        double nozzleHeatDrop = CourseProjectFormulas.nozzleHeatDrop(
+                heatDrop, assumptions.regulatingReaction());
+        double nozzleVelocity = CourseProjectFormulas.nozzleTheoreticalVelocity(nozzleHeatDrop);
         double nozzlePressure = hs.pressureForIsentropicDrop(
                 energy.inletPressureAtNozzlesMPa(), energy.inletEnthalpyKJkg(), nozzleHeatDrop);
         double nozzleVolume = hs.volumePH(nozzlePressure,
                 energy.inletEnthalpyKJkg() - nozzleHeatDrop);
-        double angle = Math.toRadians(assumptions.regulatingNozzleAngleDeg());
-        double nozzleArea = energy.estimatedFlowKgS() * nozzleVolume
-                / (assumptions.nozzleFlowCoefficient() * nozzleVelocity);
-        double admissionLength = nozzleArea / (Math.PI * meanDiameter * Math.sin(angle));
-        double admission = assumptions.admissionCoefficient()
-                * Math.sqrt(admissionLength * 100.0);
-        if (!(admission > 0.0 && admission <= 1.0)) {
-            throw new IllegalArgumentException("предварительная парциальность e = " + admission
-                    + " вышла из (0, 1]");
-        }
-        double nozzleHeight = admissionLength / admission;
-        if (!(nozzleHeight > 0.0)) {
-            throw new IllegalArgumentException("высота сопловой решётки не положительна: "
-                    + nozzleHeight + " м");
-        }
+        double nozzleArea = CourseProjectFormulas.nozzleArea(
+                energy.estimatedFlowKgS(), nozzleVolume,
+                assumptions.nozzleFlowCoefficient(), nozzleVelocity);
+        double admissionLength = CourseProjectFormulas.admissionLength(
+                nozzleArea, meanDiameter, assumptions.regulatingNozzleAngleDeg());
+        double admission = CourseProjectFormulas.admission(admissionLength,
+                assumptions.admissionCoefficient());
+        double nozzleHeight = CourseProjectFormulas.nozzleHeight(admissionLength, admission);
         return new PreliminaryResult.RegulatingStage(input.regulatingKind(), heatDrop,
                 fictiveVelocity, circumferential, meanDiameter,
                 assumptions.regulatingReaction(), nozzleHeatDrop, nozzleVelocity,
@@ -113,42 +109,48 @@ public final class PreliminaryCalculator {
         double flow = energy.estimatedFlowKgS();
         double p0 = energy.inletPressureAtNozzlesMPa();
         double h0 = energy.inletEnthalpyKJkg();
-        double v0 = energy.inletVolumeM3kg();
 
         double p2rs = hs.pressureForIsentropicDrop(p0, h0, regulating.heatDropKJkg());
         CourseProjectEfficiency.RegulatingEstimate regulatingEstimate =
                 switch (input.regulatingKind()) {
                     case TWO_ROW -> CourseProjectEfficiency.regulatingDoubleRow(
-                            flow, p0, v0, regulating.heatDropKJkg());
+                            flow, p0, energy.inletVolumeM3kg(), regulating.heatDropKJkg());
                     case ONE_ROW -> CourseProjectEfficiency.regulatingSingleRow(
-                            flow, p0, v0, regulating.heatDropKJkg());
+                            flow, p0, energy.inletVolumeM3kg(), regulating.heatDropKJkg());
                 };
-        double h2rs = h0 - regulatingEstimate.internalWork();
-        double v2rs = hs.volumePH(p2rs, h2rs);
+        double regulatingWork = CourseProjectFormulas.regulatingInternalWork(
+                regulating.heatDropKJkg(), regulatingEstimate.efficiency());
+        double h2rs = h0 - regulatingWork;
+        FlowPoint rsOutlet = FlowPoint.actual(hs.pointPH(p2rs, h2rs));
 
         double chvdDrop = input.sectionHeatDrops().chvdKJkg();
         double pChvd = hs.pressureForIsentropicDrop(p2rs, h2rs, chvdDrop);
-        double vChvd = hs.volumePH(pChvd, h2rs - chvdDrop);
+        FlowPoint chvdIsentropic = FlowPoint.isentropic(hs.pointPH(pChvd, h2rs - chvdDrop));
         CourseProjectEfficiency.SectionEstimate chvd = CourseProjectEfficiency.section(
                 CourseProjectEfficiency.Section.CHVD, flow, chvdDrop,
-                CourseProjectEfficiency.meanVolume(v2rs, vChvd));
-        double hChvd = h2rs - chvd.internalWork();
-        double vChvdReal = hs.volumePH(pChvd, hChvd);
+                CourseProjectFormulas.meanVolume(rsOutlet.getPoint().volumeM3kg(),
+                        chvdIsentropic.getPoint().volumeM3kg()));
+        double chvdWork = CourseProjectFormulas.sectionInternalWork(chvdDrop,
+                chvd.efficiency());
+        double hChvd = h2rs - chvdWork;
+        FlowPoint chvdOutlet = FlowPoint.actual(hs.pointPH(pChvd, hChvd));
 
         double chsdDrop = input.sectionHeatDrops().chsdKJkg();
         double pChsd = hs.pressureForIsentropicDrop(pChvd, hChvd, chsdDrop);
         double hChsdIs = hChvd - chsdDrop;
-        double vChsd = hs.volumePH(pChsd, hChsdIs);
+        FlowPoint chsdIsentropic = FlowPoint.isentropic(hs.pointPH(pChsd, hChsdIs));
         HsDiagram.HeatDropSplit chsdSplit = hs.splitDrop(pChvd, hChvd, pChsd);
-        double chsdY1 = 1.0 - hs.vapourFractionPH(pChvd, hChvd);
-        double chsdY2 = 1.0 - hs.vapourFractionPH(pChsd, hChsdIs);
-        double chsdWetness = CourseProjectEfficiency.wetnessFactor(chsdY1, chsdY2,
+        double chsdWetness = CourseProjectFormulas.wetnessFactor(
+                chvdOutlet.getPoint().wetness(), chsdIsentropic.getPoint().wetness(),
                 chsdSplit.wet(), chsdDrop);
         CourseProjectEfficiency.SectionEstimate chsd = CourseProjectEfficiency.section(
                 CourseProjectEfficiency.Section.CHSD, flow, chsdDrop,
-                CourseProjectEfficiency.meanVolume(vChvdReal, vChsd), chsdWetness, 0.0);
-        double hChsd = hChvd - chsd.internalWork();
-        double vChsdReal = hs.volumePH(pChsd, hChsd);
+                CourseProjectFormulas.meanVolume(chvdOutlet.getPoint().volumeM3kg(),
+                        chsdIsentropic.getPoint().volumeM3kg()), chsdWetness, 0.0);
+        double chsdWork = CourseProjectFormulas.sectionInternalWork(chsdDrop,
+                chsd.efficiency());
+        double hChsd = hChvd - chsdWork;
+        FlowPoint chsdOutlet = FlowPoint.actual(hs.pointPH(pChsd, hChsd));
 
         double pk = energy.exhaustPressureWithLossMPa();
         double chndDrop = hs.isentropicDrop(pChsd, hChsd, pk);
@@ -156,25 +158,52 @@ public final class PreliminaryCalculator {
             throw new IllegalArgumentException("располагаемый перепад ЧНД не положителен");
         }
         double hChndIs = hChsd - chndDrop;
-        double vChnd = hs.volumePH(pk, hChndIs);
+        FlowPoint chndIsentropic = FlowPoint.isentropic(hs.pointPH(pk, hChndIs));
         HsDiagram.HeatDropSplit chndSplit = hs.splitDrop(pChsd, hChsd, pk);
-        double chndY1 = 1.0 - hs.vapourFractionPH(pChsd, hChsd);
-        double chndY2 = 1.0 - hs.vapourFractionPH(pk, hChndIs);
-        double chndWetness = CourseProjectEfficiency.wetnessFactor(chndY1, chndY2,
+        double chndWetness = CourseProjectFormulas.wetnessFactor(
+                chsdOutlet.getPoint().wetness(), chndIsentropic.getPoint().wetness(),
                 chndSplit.wet(), chndDrop);
-        double exitLoss = CourseProjectEfficiency.exitVelocityLoss(
+        double exitLoss = CourseProjectFormulas.exitVelocityLoss(
                 assumptions.limitPowerExitHeatDropKJkg(), chndDrop);
         CourseProjectEfficiency.SectionEstimate chnd = CourseProjectEfficiency.section(
                 CourseProjectEfficiency.Section.CHND, flow, chndDrop,
-                CourseProjectEfficiency.meanVolume(vChsdReal, vChnd), chndWetness, exitLoss);
-        double vChndActual = hs.volumePH(pk, hChsd - chnd.internalWork());
+                CourseProjectFormulas.meanVolume(chsdOutlet.getPoint().volumeM3kg(),
+                        chndIsentropic.getPoint().volumeM3kg()), chndWetness, exitLoss);
+        double chndWork = CourseProjectFormulas.sectionInternalWork(chndDrop,
+                chnd.efficiency());
+        FlowPoint exhaust = FlowPoint.actual(hs.pointPH(pk, hChsd - chndWork));
 
-        double internalWork = regulatingEstimate.internalWork() + chvd.internalWork()
-                + chsd.internalWork() + chnd.internalWork();
-        double turbineEfficiency = CourseProjectEfficiency.turbineEfficiency(internalWork,
+        FlowPoint regulatingStageIsentropic =
+                FlowPoint.isentropic(hs.pointPH(p2rs, h0 - regulating.heatDropKJkg()));
+        FlowPoint exhaustIsentropic = energy.isentropicExhaust();
+        ProcessFlow processFlow = new ProcessFlow();
+        processFlow.appendActual(energy.inlet());
+        processFlow.appendActual(rsOutlet);
+        processFlow.appendActual(chvdOutlet);
+        processFlow.appendActual(chsdOutlet);
+        processFlow.appendActual(exhaust);
+        processFlow.linkIsentropic(energy.inlet(), regulatingStageIsentropic);
+        processFlow.linkIsentropic(regulatingStageIsentropic, exhaustIsentropic);
+        processFlow.linkIsentropic(rsOutlet, chvdIsentropic);
+        processFlow.linkIsentropic(chvdOutlet, chsdIsentropic);
+        processFlow.linkIsentropic(chsdOutlet, chndIsentropic);
+        for (FlowPoint point : List.of(energy.inlet(), rsOutlet, chvdOutlet, chsdOutlet, exhaust,
+                regulatingStageIsentropic, chvdIsentropic, chsdIsentropic, chndIsentropic,
+                exhaustIsentropic)) {
+            point.setMassFlow(flow);
+        }
+        ExpansionProcess process = new ExpansionProcess(processFlow,
+                new ExpansionProcess.Nodes(energy.inlet(), rsOutlet, chvdOutlet, chsdOutlet,
+                        exhaust, regulatingStageIsentropic, chvdIsentropic, chsdIsentropic,
+                        chndIsentropic, exhaustIsentropic));
+
+        double internalWork = CourseProjectFormulas.totalInternalWork(
+                regulatingWork, chvdWork, chsdWork, chndWork);
+        double turbineEfficiency = CourseProjectFormulas.turbineEfficiency(internalWork,
                 energy.availableHeatDropKJkg());
-        double refinedFlow = energy.economicPowerKW() / (internalWork
-                * assumptions.mechanicalEfficiency() * assumptions.generatorEfficiency());
+        double refinedFlow = CourseProjectFormulas.refinedFlow(energy.economicPowerKW(),
+                internalWork, assumptions.mechanicalEfficiency(),
+                assumptions.generatorEfficiency());
 
         double controlChnd = input.sectionHeatDrops().chndKJkg();
         if (Math.abs(chndDrop - controlChnd) > 1.0) {
@@ -189,8 +218,7 @@ public final class PreliminaryCalculator {
                             + "больше чем на 5%%",
                     refinedFlow, flow));
         }
-        return new PreliminaryResult.Expansion(regulatingEstimate, chvd, chsd, chnd,
-                p2rs, h2rs, v2rs, pChvd, vChvd, pChsd, vChsd, vChnd, vChndActual,
+        return new PreliminaryResult.Expansion(process, regulatingEstimate, chvd, chsd, chnd,
                 internalWork, refinedFlow, turbineEfficiency);
     }
 
@@ -200,21 +228,20 @@ public final class PreliminaryCalculator {
             DesignInput input, DesignAssumptions assumptions,
             PreliminaryResult.EnergyEstimate energy,
             PreliminaryResult.Expansion expansion, List<String> notes) {
-        double exitVelocity = Math.sqrt(
-                2.0 * assumptions.limitPowerExitHeatDropKJkg() * 1000.0);
-        double revolutionsPerSecond = input.rotationRpm() / 60.0;
-        double limitPower = assumptions.limitPowerExtractionFactor() / (2.0 * Math.PI)
-                * assumptions.limitPowerTaperFactor()
-                * expansion.turbineEfficiency()
-                * (assumptions.allowableBladeStressMPa() * exitVelocity
-                * energy.availableHeatDropKJkg() * 1000.0)
-                / (assumptions.bladeDensityKgM3() * revolutionsPerSecond
-                * revolutionsPerSecond * expansion.exhaustActualVolumeM3kg());
-        if (!(limitPower > 0.0) || !Double.isFinite(limitPower)) {
-            throw new IllegalArgumentException("предельная мощность не положительна: "
-                    + limitPower);
-        }
-        int exhaustCount = Math.max(1, (int) Math.ceil(input.nominalPowerMW() / limitPower));
+        double exitVelocity = CourseProjectFormulas.exitVelocity(
+                assumptions.limitPowerExitHeatDropKJkg());
+        double limitPower = CourseProjectFormulas.limitPower(
+                assumptions.limitPowerExtractionFactor(),
+                assumptions.limitPowerTaperFactor(),
+                expansion.turbineEfficiency(),
+                assumptions.allowableBladeStressMPa(),
+                exitVelocity,
+                energy.availableHeatDropKJkg(),
+                assumptions.bladeDensityKgM3(),
+                input.rotationRpm(),
+                expansion.exhaustActualVolumeM3kg());
+        int exhaustCount = CourseProjectFormulas.exhaustCount(
+                input.nominalPowerMW(), limitPower);
         if (exhaustCount > 1) {
             notes.add(String.format(Locale.ROOT,
                     "предельная мощность одной выхлопной камеры %.2f МВт меньше номинальной "

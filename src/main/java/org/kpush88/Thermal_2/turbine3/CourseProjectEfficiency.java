@@ -196,20 +196,27 @@ public final class CourseProjectEfficiency {
         return regulating(RegulatingKind.ONE_ROW, flow, pressureMPa, volume, heatDrop);
     }
 
-    private static RegulatingEstimate regulating(RegulatingKind kind, double flow,
-                                                 double pressureMPa, double volume,
-                                                 double heatDrop) {
+    /** КПД регулирующей ступени: {@code base − (2·10⁻⁴/G′)·√(P₀′·10⁶/V₀′)}. */
+    public static double regulatingEfficiency(RegulatingKind kind, double flow,
+                                              double pressureMPa, double volume) {
         if (kind == null) {
             throw new IllegalArgumentException("тип регулирующей ступени не задан");
         }
         requirePositive(flow, "расход через регулирующую ступень");
         requirePositive(pressureMPa, "давление перед регулирующей ступенью");
         requirePositive(volume, "удельный объём перед регулирующей ступенью");
-        requirePositive(heatDrop, "теплоперепад регулирующей ступени");
         double base = kind == RegulatingKind.TWO_ROW ? REGULATING_BASE : SINGLE_ROW_BASE;
         double efficiency = base - REGULATING_COEFFICIENT / flow
                 * Math.sqrt(pressureMPa * MPA / volume);
         requireEfficiency(efficiency, "КПД регулирующей ступени");
+        return efficiency;
+    }
+
+    private static RegulatingEstimate regulating(RegulatingKind kind, double flow,
+                                                 double pressureMPa, double volume,
+                                                 double heatDrop) {
+        requirePositive(heatDrop, "теплоперепад регулирующей ступени");
+        double efficiency = regulatingEfficiency(kind, flow, pressureMPa, volume);
         return new RegulatingEstimate(kind, efficiency, heatDrop, efficiency * heatDrop,
                 flow, pressureMPa, volume);
     }
