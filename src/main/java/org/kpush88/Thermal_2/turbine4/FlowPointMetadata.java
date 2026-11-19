@@ -12,7 +12,6 @@ public class FlowPointMetadata {
     private RowKind rowKind;
     private StageFlowPointType stageFlowPointType;
     private Stage stage;
-    private CalculationStage calculationStage;
 
 
 }

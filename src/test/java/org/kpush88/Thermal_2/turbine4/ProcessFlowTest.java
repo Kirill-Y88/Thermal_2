@@ -14,9 +14,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ProcessFlowTest {
 
     @Test
+    @DisplayName("стадия расчёта сохраняется при создании графа")
+    void calculationStageIsStored() {
+        ProcessFlow flow = new ProcessFlow(CalculationStage.DETAILED);
+
+        assertEquals(CalculationStage.DETAILED, flow.getCalculationStage());
+    }
+
+    @Test
+    @DisplayName("граф без стадии расчёта не создаётся")
+    void nullCalculationStageRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new ProcessFlow(null));
+    }
+
+    @Test
     @DisplayName("регистрация присваивает идентификатор")
     void registerAssignsId() {
-        ProcessFlow flow = new ProcessFlow();
+        ProcessFlow flow = flow();
         FlowPoint point = flow.register(actual());
 
         assertNotNull(point.getId());
@@ -26,7 +40,7 @@ class ProcessFlowTest {
     @Test
     @DisplayName("повторный идентификатор отклоняется")
     void duplicateIdRejected() {
-        ProcessFlow flow = new ProcessFlow();
+        ProcessFlow flow = flow();
         FlowPoint first = flow.register(actual());
         FlowPoint second = actual();
         second.setId(first.getId());
@@ -37,7 +51,7 @@ class ProcessFlowTest {
     @Test
     @DisplayName("фактическая цепочка строится и читается по порядку")
     void actualChainOrder() {
-        ProcessFlow flow = new ProcessFlow();
+        ProcessFlow flow = flow();
         FlowPoint a = flow.appendActual(actual());
         FlowPoint b = flow.appendActual(actual());
         FlowPoint c = flow.appendActual(actual());
@@ -50,7 +64,7 @@ class ProcessFlowTest {
     @Test
     @DisplayName("вставка в середину фактической цепочки")
     void insertInMiddle() {
-        ProcessFlow flow = new ProcessFlow();
+        ProcessFlow flow = flow();
         FlowPoint a = flow.appendActual(actual());
         FlowPoint c = flow.appendActual(actual());
         FlowPoint b = flow.insertActualAfter(a, actual());
@@ -63,7 +77,7 @@ class ProcessFlowTest {
     @Test
     @DisplayName("изоэнтропная цепочка не входит в фактическую")
     void isentropicChainIsSeparate() {
-        ProcessFlow flow = new ProcessFlow();
+        ProcessFlow flow = flow();
         FlowPoint actual = flow.appendActual(actual());
         FlowPoint is1 = flow.linkIsentropic(actual, isentropic());
         FlowPoint is2 = flow.linkIsentropic(is1, isentropic());
@@ -76,7 +90,7 @@ class ProcessFlowTest {
     @Test
     @DisplayName("поиск границы цилиндра и точек ступени")
     void findsBoundaryAndStagePoints() {
-        ProcessFlow flow = new ProcessFlow();
+        ProcessFlow flow = flow();
         Stage stage = new Stage();
         stage.setName("ЧВД-1");
         stage.setNumber(1);
@@ -97,7 +111,7 @@ class ProcessFlowTest {
     @Test
     @DisplayName("цикл в фактической цепочке отклоняется")
     void cycleRejected() {
-        ProcessFlow flow = new ProcessFlow();
+        ProcessFlow flow = flow();
         FlowPoint a = actual();
         flow.register(a);
         flow.setRoot(a);
@@ -109,7 +123,7 @@ class ProcessFlowTest {
     @Test
     @DisplayName("несвязанная зарегистрированная точка отклоняется")
     void orphanRejected() {
-        ProcessFlow flow = new ProcessFlow();
+        ProcessFlow flow = flow();
         flow.appendActual(actual());
         flow.register(actual());
 
@@ -119,7 +133,7 @@ class ProcessFlowTest {
     @Test
     @DisplayName("nextActual должен указывать на фактическую точку")
     void actualEdgeRequiresActualTarget() {
-        ProcessFlow flow = new ProcessFlow();
+        ProcessFlow flow = flow();
         FlowPoint actual = flow.appendActual(actual());
         actual.setNextActual(isentropic());
         flow.register(actual.getNextActual());
@@ -131,7 +145,7 @@ class ProcessFlowTest {
     @Test
     @DisplayName("nextIsentropic должен указывать на изоэнтропную точку")
     void isentropicEdgeRequiresIsentropicTarget() {
-        ProcessFlow flow = new ProcessFlow();
+        ProcessFlow flow = flow();
         FlowPoint actual = flow.appendActual(actual());
         actual.setNextIsentropic(actual());
 
@@ -141,12 +155,16 @@ class ProcessFlowTest {
     @Test
     @DisplayName("тип точки ступени требует заданную ступень")
     void stagePointRequiresStage() {
-        ProcessFlow flow = new ProcessFlow();
+        ProcessFlow flow = flow();
         FlowPoint point = actual();
         point.getFlowPointMetadata().setStageFlowPointType(StageFlowPointType.MOVING_BLADE_OUT);
         flow.appendActual(point);
 
         assertThrows(IllegalStateException.class, flow::validateGraph);
+    }
+
+    private static ProcessFlow flow() {
+        return new ProcessFlow(CalculationStage.PRELIMINARY);
     }
 
     private static FlowPoint actual() {

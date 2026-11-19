@@ -1,7 +1,6 @@
 package org.kpush88.Thermal_2.turbine4;
 
 import lombok.Getter;
-import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.util.ArrayDeque;
@@ -22,15 +21,32 @@ import java.util.Set;
  * Фактическая цепочка строится через {@link FlowPoint#getNextActual()}, изоэнтропийные
  * вспомогательные точки — через {@link FlowPoint#getNextIsentropic()}. Изоэнтропийные точки
  * не входят в {@link #actualPath()} и используются только для построения h—s диаграммы.
+ *
+ * <p>Каждый граф относится ровно к одной стадии расчёта. Стадия задаётся при
+ * создании и не может быть изменена.
  */
 @Getter
 @Setter
-@NoArgsConstructor
 public class ProcessFlow {
+
+    private final CalculationStage calculationStage;
 
     private Turbine turbine;
 
     private FlowPoint root;
+
+    /**
+     * Создать граф для указанной стадии расчёта.
+     *
+     * @param calculationStage стадия расчёта
+     * @throws IllegalArgumentException если стадия не задана
+     */
+    public ProcessFlow(CalculationStage calculationStage) {
+        if (calculationStage == null) {
+            throw new IllegalArgumentException("стадия расчёта не задана");
+        }
+        this.calculationStage = calculationStage;
+    }
 
     /** Реестр всех узлов по идентификатору. */
     private final Map<Long, FlowPoint> pointsById = new HashMap<>();
@@ -239,6 +255,9 @@ public class ProcessFlow {
      * отсутствие циклов и соответствие типа цели типу связи. Пустой граф считается корректным.
      */
     public void validateGraph() {
+        if (calculationStage == null) {
+            throw new IllegalStateException("не задана стадия расчёта");
+        }
         if (root == null) {
             if (!pointsById.isEmpty()) {
                 throw new IllegalStateException("в графе есть точки, но не задан корень процесса");
